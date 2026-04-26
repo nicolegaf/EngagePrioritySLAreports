@@ -46,9 +46,9 @@ function detectLabels(labelStr) {
   const parts = (labelStr || "").toUpperCase().split(",").map((l) => l.trim());
   const priorities = new Set(); const customerTypes = new Set();
   for (const part of parts) {
-    if (/\bP0\b/.test(part)) priorities.add("P0");
-    if (/\bP1\b/.test(part)) priorities.add("P1");
-    if (/\bP2\b/.test(part)) priorities.add("P2");
+    if (part.includes("_P0") || part === "P0") priorities.add("P0");
+    if (part.includes("_P1") || part === "P1") priorities.add("P1");
+    if (part.includes("_P2") || part === "P2") priorities.add("P2");
     if (part.includes("PAYGE"))    customerTypes.add("PAYGE");
     if (part.includes("SERVICES")) customerTypes.add("Services");
     if (part.includes("CREDIT"))   customerTypes.add("Credit");
