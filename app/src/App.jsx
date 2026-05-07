@@ -18,28 +18,50 @@ const CT_META = {
   Credit:   { color: "#60A5FA", label: "Credit" },
 };
 
+const ENGAGE_NETWORKS = ["facebook", "twitter", "instagram", "youtube", "linkedin",
+  "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay"];
+
+function splitBySep(line, sep) {
+  const cols = []; let cur = "", inQ = false;
+  for (const ch of line) {
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === sep && !inQ) { cols.push(cur.replace(/^"|"$/g, "").trim()); cur = ""; }
+    else cur += ch;
+  }
+  cols.push(cur.replace(/^"|"$/g, "").trim());
+  return cols;
+}
+
 function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-  const firstLine = lines[0];
-  const sep = firstLine.includes("\t") ? "\t" : firstLine.includes(";") ? ";" : ",";
-  const splitLine = (line) => {
-    if (sep !== ",") return line.split(sep).map((c) => c.replace(/^"|"$/g, "").trim());
-    const cols = []; let cur = "", inQ = false;
-    for (const ch of line) {
-      if (ch === '"') { inQ = !inQ; }
-      else if (ch === "," && !inQ) { cols.push(cur.trim()); cur = ""; }
-      else cur += ch;
-    }
-    cols.push(cur.trim()); return cols;
+  const rawLines = text.split(/\r?\n/);
+  if (rawLines.length < 2) return [];
+  const headerLine = rawLines[0];
+  const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
+  const headers = splitBySep(headerLine, sep);
+  const isRecordStart = (line) => {
+    const lower = line.trimStart().toLowerCase();
+    return ENGAGE_NETWORKS.some((n) => lower.startsWith(n + sep));
   };
-  const headers = splitLine(firstLine);
-  return lines.slice(1).map((line) => {
-    if (!line.trim()) return null;
-    const cols = splitLine(line); const row = {};
+  let reconstructed = [];
+  let current = null;
+  for (let i = 1; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (!line.trim()) continue;
+    if (isRecordStart(line)) {
+      if (current !== null) reconstructed.push(current);
+      current = line;
+    } else if (current !== null) {
+      current += " " + line.trim();
+    }
+  }
+  if (current !== null) reconstructed.push(current);
+  const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
+  return sourceLines.map((line) => {
+    const cols = splitBySep(line, sep);
+    const row = {};
     headers.forEach((h, i) => (row[h] = (cols[i] ?? "").trim()));
     return row;
-  }).filter(Boolean);
+  });
 }
 
 function detectLabels(labelStr) {
@@ -69,7 +91,7 @@ function calcMetrics(rows) {
   const responses = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => new Date(a["Date created (UTC)"]) - new Date(b["Date created (UTC)"]));
-    const allLabels = sorted.map((m) => m["Label"] || "").join(",");
+    const allLabels = sorted.map((m) => m["Label"] || m["Labels"] || "").join(",");
     const { priorities, customerTypes } = detectLabels(allLabels);
     for (let i = 0; i < sorted.length; i++) {
       if (!isCustomerMsg(sorted[i])) continue;
@@ -164,7 +186,6 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
-
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
           <div>
@@ -172,7 +193,6 @@ export default function App() {
             <div style={{ fontSize: 12, color: C.textDim }}>Centrica / British Gas · Brandwatch Engage export analyser</div>
           </div>
         </div>
-
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "20px 24px", marginBottom: 24 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Upload Engage Export</div>
           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>
@@ -187,7 +207,6 @@ export default function App() {
             <div style={{ marginTop: 14, background: "#FF3B5C22", border: "1px solid #FF3B5C55", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#FF3B5C" }}>⚠ {errorMsg}</div>
           )}
         </div>
-
         {status === "done" && summary && (
           <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
             {[
@@ -202,7 +221,6 @@ export default function App() {
             ))}
           </div>
         )}
-
         {status === "done" && report && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
@@ -241,7 +259,6 @@ export default function App() {
             </div>
           </div>
         )}
-
       </div>
     </div>
   );
