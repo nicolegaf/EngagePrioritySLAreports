@@ -93,8 +93,6 @@ function detectLabels(labelStr) {
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
-// Business hours schedules indexed by day of week (0=Sun, 1=Mon ... 6=Sat).
-// Each entry is [openHour, closeHour] in UK local time, or null if closed.
 const BIZ_SCHEDULES = {
   PAYGE:    [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
   Credit:   [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
@@ -131,8 +129,6 @@ function makeUTC(year, month, day, ukHour, ukMinute) {
   return new Date(Date.UTC(year, month - 1, day, ukHour - off, ukMinute));
 }
 
-// Count only the minutes within business hours between two UTC timestamps.
-// e.g. message at 7:50pm (closes 8pm) + reply at 8:05am = 10 + 5 = 15 mins.
 function bizHoursElapsed(startUTC, endUTC, customerType) {
   const schedule = BIZ_SCHEDULES[customerType];
   if (!schedule || endUTC <= startUTC) return Math.max(0, (endUTC - startUTC) / 60000);
@@ -150,7 +146,6 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
       const overlapEnd   = endUTC   < dayClose ? endUTC   : dayClose;
       if (overlapEnd > overlapStart) totalMinutes += (overlapEnd - overlapStart) / 60000;
     }
-    // Advance to next UK calendar day (add 25h to safely cross any DST boundary)
     const next = new Date(probe.getTime() + 25 * 3600000);
     const ukNext = getUKInfo(next);
     probe = makeUTC(ukNext.year, ukNext.month, ukNext.day, 0, 0);
@@ -195,10 +190,12 @@ function buildReport(responses) {
       if (!matching.length) { table[p][ct] = null; continue; }
       const w30 = matching.filter((r) => r.minutes <= 30).length;
       const w60 = matching.filter((r) => r.minutes <= 60).length;
+      const w90 = matching.filter((r) => r.minutes <= 90).length;
       table[p][ct] = {
-        total: matching.length, within30: w30, within60: w60,
+        total: matching.length, within30: w30, within60: w60, within90: w90,
         pct30: Math.round((w30 / matching.length) * 100),
         pct60: Math.round((w60 / matching.length) * 100),
+        pct90: Math.round((w90 / matching.length) * 100),
         avgMins: Math.round(matching.reduce((s, r) => s + r.minutes, 0) / matching.length),
       };
     }
@@ -220,21 +217,28 @@ function SLACell({ data }) {
   if (!data) return <td style={{ padding: "14px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
   const color30 = data.pct30 >= 80 ? C.ok : data.pct30 >= 50 ? C.warn : C.danger;
   const color60 = data.pct60 >= 80 ? C.ok : data.pct60 >= 50 ? C.warn : C.danger;
+  const color90 = data.pct90 >= 80 ? C.ok : data.pct90 >= 50 ? C.warn : C.danger;
   return (
     <td style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
       <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{data.total} responses · avg {data.avgMins}m</div>
       <div style={{ display: "flex", gap: 14 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 30 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
           <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within30}/{data.total}</div>
           <PctBar pct={data.pct30} color={color30} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 60 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
           <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within60}/{data.total}</div>
           <PctBar pct={data.pct60} color={color60} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 90 min</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: color90, lineHeight: 1 }}>{data.pct90}%</div>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within90}/{data.total}</div>
+          <PctBar pct={data.pct90} color={color90} />
         </div>
       </div>
     </td>
@@ -267,7 +271,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
-      <div style={{ maxWidth: 920, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1050, margin: "0 auto" }}>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
@@ -311,7 +315,7 @@ export default function App() {
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30 and 60 minutes · business hours only</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30, 60 and 90 minutes · business hours only</div>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
