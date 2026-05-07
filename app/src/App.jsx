@@ -18,8 +18,10 @@ const CT_META = {
   Credit:   { color: "#60A5FA", label: "Credit" },
 };
 
-const ENGAGE_NETWORKS = ["facebook", "twitter", "instagram", "youtube", "linkedin",
-  "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay"];
+const ENGAGE_NETWORKS = new Set([
+  "facebook", "twitter", "instagram", "youtube", "linkedin",
+  "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay",
+]);
 
 function splitBySep(line, sep) {
   const cols = []; let cur = "", inQ = false;
@@ -35,13 +37,23 @@ function splitBySep(line, sep) {
 function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
+
   const headerLine = rawLines[0];
   const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
+
+  const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
+
   const isRecordStart = (line) => {
+    if (!line.trim()) return false;
+    if (networkColIdx >= 0) {
+      const val = line.split(sep)[networkColIdx] || "";
+      return ENGAGE_NETWORKS.has(val.replace(/"/g, "").toLowerCase().trim());
+    }
     const lower = line.trimStart().toLowerCase();
-    return ENGAGE_NETWORKS.some((n) => lower.startsWith(n + sep));
+    return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
   };
+
   let reconstructed = [];
   let current = null;
   for (let i = 1; i < rawLines.length; i++) {
@@ -55,7 +67,9 @@ function parseCSV(text) {
     }
   }
   if (current !== null) reconstructed.push(current);
+
   const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
+
   return sourceLines.map((line) => {
     const cols = splitBySep(line, sep);
     const row = {};
@@ -186,6 +200,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
+
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
           <div>
@@ -193,6 +208,7 @@ export default function App() {
             <div style={{ fontSize: 12, color: C.textDim }}>Centrica / British Gas · Brandwatch Engage export analyser</div>
           </div>
         </div>
+
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "20px 24px", marginBottom: 24 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Upload Engage Export</div>
           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>
@@ -207,6 +223,7 @@ export default function App() {
             <div style={{ marginTop: 14, background: "#FF3B5C22", border: "1px solid #FF3B5C55", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#FF3B5C" }}>⚠ {errorMsg}</div>
           )}
         </div>
+
         {status === "done" && summary && (
           <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
             {[
@@ -221,10 +238,11 @@ export default function App() {
             ))}
           </div>
         )}
+
         {status === "done" && report && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority & Customer Type</div>
               <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of agent responses within 30 and 60 minutes of the customer message</div>
             </div>
             <div style={{ overflowX: "auto" }}>
@@ -259,6 +277,7 @@ export default function App() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
