@@ -93,6 +93,8 @@ function detectLabels(labelStr) {
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
+// Business hours schedules indexed by day of week (0=Sun, 1=Mon ... 6=Sat).
+// Each entry is [openHour, closeHour] in UK local time, or null if closed.
 const BIZ_SCHEDULES = {
   PAYGE:    [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
   Credit:   [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
@@ -129,24 +131,31 @@ function makeUTC(year, month, day, ukHour, ukMinute) {
   return new Date(Date.UTC(year, month - 1, day, ukHour - off, ukMinute));
 }
 
-function effectiveStart(utcDate, customerType) {
+// Count only the minutes within business hours between two UTC timestamps.
+// e.g. message at 7:50pm (closes 8pm) + reply at 8:05am = 10 + 5 = 15 mins.
+function bizHoursElapsed(startUTC, endUTC, customerType) {
   const schedule = BIZ_SCHEDULES[customerType];
-  if (!schedule) return utcDate;
-  for (let d = 0; d < 8; d++) {
-    const probe = new Date(utcDate.getTime() + d * 24 * 3600000);
+  if (!schedule || endUTC <= startUTC) return Math.max(0, (endUTC - startUTC) / 60000);
+  let totalMinutes = 0;
+  const uk0 = getUKInfo(startUTC);
+  let probe = makeUTC(uk0.year, uk0.month, uk0.day, 0, 0);
+  for (let d = 0; d < 30 && probe < endUTC; d++) {
     const uk = getUKInfo(probe);
     const hours = schedule[uk.dow];
-    if (!hours) continue;
-    const [openH, closeH] = hours;
-    const ukMins = uk.hour * 60 + uk.minute;
-    if (d === 0) {
-      if (ukMins >= openH * 60 && ukMins < closeH * 60) return utcDate;
-      if (ukMins < openH * 60) return makeUTC(uk.year, uk.month, uk.day, openH, 0);
-    } else {
-      return makeUTC(uk.year, uk.month, uk.day, openH, 0);
+    if (hours) {
+      const [openH, closeH] = hours;
+      const dayOpen  = makeUTC(uk.year, uk.month, uk.day, openH,  0);
+      const dayClose = makeUTC(uk.year, uk.month, uk.day, closeH, 0);
+      const overlapStart = startUTC > dayOpen  ? startUTC : dayOpen;
+      const overlapEnd   = endUTC   < dayClose ? endUTC   : dayClose;
+      if (overlapEnd > overlapStart) totalMinutes += (overlapEnd - overlapStart) / 60000;
     }
+    // Advance to next UK calendar day (add 25h to safely cross any DST boundary)
+    const next = new Date(probe.getTime() + 25 * 3600000);
+    const ukNext = getUKInfo(next);
+    probe = makeUTC(ukNext.year, ukNext.month, ukNext.day, 0, 0);
   }
-  return utcDate;
+  return totalMinutes;
 }
 
 function isAgentMsg(row) { return (row["Author name"] || "").trim().toLowerCase() === "british gas"; }
@@ -171,8 +180,7 @@ function calcMetrics(rows) {
     );
     if (!firstAgentReply) continue;
     const ct = customerTypes[0] ?? null;
-    const start = effectiveStart(firstCustomerTime, ct);
-    const minutes = Math.max(0, (new Date(firstAgentReply["Date created (UTC)"]) - start) / 60000);
+    const minutes = bizHoursElapsed(firstCustomerTime, new Date(firstAgentReply["Date created (UTC)"]), ct);
     if (minutes < 20160) responses.push({ minutes, priorities, customerTypes });
   }
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
@@ -333,7 +341,7 @@ export default function App() {
               <span><span style={{ color: C.ok }}>■</span> ≥80% on target</span>
               <span><span style={{ color: C.warn }}>■</span> 50–79%</span>
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
-              <span style={{ marginLeft: "auto" }}>First response time only · outside-hours messages clocked from next opening time</span>
+              <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only</span>
             </div>
           </div>
         )}
