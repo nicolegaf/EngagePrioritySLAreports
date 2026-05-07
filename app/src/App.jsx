@@ -153,8 +153,18 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
   return totalMinutes;
 }
 
-function isAgentMsg(row) { return (row["Author name"] || "").trim().toLowerCase() === "british gas"; }
-function isCustomerMsg(row) { return !isAgentMsg(row); }
+function isAutomation(row) {
+  return (row["Author name"] || "").toLowerCase().includes("automation");
+}
+function isIrrelevant(row) {
+  return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant");
+}
+function isAgentMsg(row) {
+  return !isAutomation(row) && (row["Author name"] || "").trim().toLowerCase() === "british gas";
+}
+function isCustomerMsg(row) {
+  return !isAutomation(row) && !isAgentMsg(row) && !isIrrelevant(row);
+}
 
 function calcMetrics(rows) {
   const convMap = {};
@@ -345,7 +355,7 @@ export default function App() {
               <span><span style={{ color: C.ok }}>■</span> ≥80% on target</span>
               <span><span style={{ color: C.warn }}>■</span> 50–79%</span>
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
-              <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only</span>
+              <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only · automation & irrelevant excluded</span>
             </div>
           </div>
         )}
