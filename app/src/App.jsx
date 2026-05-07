@@ -37,23 +37,26 @@ function splitBySep(line, sep) {
 function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
-
   const headerLine = rawLines[0];
   const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
-
   const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
-
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
-    if (networkColIdx >= 0) {
-      const val = line.split(sep)[networkColIdx] || "";
-      return ENGAGE_NETWORKS.has(val.replace(/"/g, "").toLowerCase().trim());
+    const parts = line.split(sep);
+    if (networkColIdx > 0) {
+      const firstVal = (parts[0] || "").replace(/"/g, "").trim();
+      if (!/^\d+$/.test(firstVal)) return false;
+      const netVal = (parts[networkColIdx] || "").replace(/"/g, "").toLowerCase().trim();
+      return netVal.length > 0 && /^[a-z]+$/.test(netVal);
+    }
+    if (networkColIdx === 0) {
+      const netVal = (parts[0] || "").replace(/"/g, "").toLowerCase().trim();
+      return netVal.length > 0 && netVal.length <= 20 && /^[a-z]+$/.test(netVal);
     }
     const lower = line.trimStart().toLowerCase();
     return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
   };
-
   let reconstructed = [];
   let current = null;
   for (let i = 1; i < rawLines.length; i++) {
@@ -67,9 +70,7 @@ function parseCSV(text) {
     }
   }
   if (current !== null) reconstructed.push(current);
-
   const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
-
   return sourceLines.map((line) => {
     const cols = splitBySep(line, sep);
     const row = {};
@@ -90,6 +91,62 @@ function detectLabels(labelStr) {
     if (part.includes("CREDIT"))   customerTypes.add("Credit");
   }
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
+}
+
+const BIZ_SCHEDULES = {
+  PAYGE:    [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
+  Credit:   [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
+  Services: [[8,18], [8,20], [8,20], [8,20], [8,20], [8,20], [8,18]],
+};
+
+function getUKInfo(utcDate) {
+  const parts = {};
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(utcDate).forEach(({ type, value }) => { parts[type] = +value; });
+  const wd = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/London", weekday: "short",
+  }).format(utcDate);
+  parts.dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 0;
+  return parts;
+}
+
+function londonOffset(utcDate) {
+  const ukH = +new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London", hour: "2-digit", hour12: false,
+  }).formatToParts(utcDate).find((p) => p.type === "hour").value;
+  let off = ukH - utcDate.getUTCHours();
+  if (off < -12) off += 24;
+  if (off > 12) off -= 24;
+  return off;
+}
+
+function makeUTC(year, month, day, ukHour, ukMinute) {
+  const est = new Date(Date.UTC(year, month - 1, day, ukHour, ukMinute));
+  const off = londonOffset(est);
+  return new Date(Date.UTC(year, month - 1, day, ukHour - off, ukMinute));
+}
+
+function effectiveStart(utcDate, customerType) {
+  const schedule = BIZ_SCHEDULES[customerType];
+  if (!schedule) return utcDate;
+  for (let d = 0; d < 8; d++) {
+    const probe = new Date(utcDate.getTime() + d * 24 * 3600000);
+    const uk = getUKInfo(probe);
+    const hours = schedule[uk.dow];
+    if (!hours) continue;
+    const [openH, closeH] = hours;
+    const ukMins = uk.hour * 60 + uk.minute;
+    if (d === 0) {
+      if (ukMins >= openH * 60 && ukMins < closeH * 60) return utcDate;
+      if (ukMins < openH * 60) return makeUTC(uk.year, uk.month, uk.day, openH, 0);
+    } else {
+      return makeUTC(uk.year, uk.month, uk.day, openH, 0);
+    }
+  }
+  return utcDate;
 }
 
 function isAgentMsg(row) { return (row["Author name"] || "").trim().toLowerCase() === "british gas"; }
@@ -113,8 +170,10 @@ function calcMetrics(rows) {
       (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) > firstCustomerTime
     );
     if (!firstAgentReply) continue;
-    const minutes = (new Date(firstAgentReply["Date created (UTC)"]) - firstCustomerTime) / 60000;
-    if (minutes >= 0 && minutes < 20160) responses.push({ minutes, priorities, customerTypes });
+    const ct = customerTypes[0] ?? null;
+    const start = effectiveStart(firstCustomerTime, ct);
+    const minutes = Math.max(0, (new Date(firstAgentReply["Date created (UTC)"]) - start) / 60000);
+    if (minutes < 20160) responses.push({ minutes, priorities, customerTypes });
   }
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
 }
@@ -243,8 +302,8 @@ export default function App() {
         {status === "done" && report && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority & Customer Type</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of agent responses within 30 and 60 minutes of the customer message</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30 and 60 minutes · business hours only</div>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
@@ -274,7 +333,7 @@ export default function App() {
               <span><span style={{ color: C.ok }}>■</span> ≥80% on target</span>
               <span><span style={{ color: C.warn }}>■</span> 50–79%</span>
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
-              <span style={{ marginLeft: "auto" }}>Automated welcome messages excluded from SLA calculations.</span>
+              <span style={{ marginLeft: "auto" }}>First response time only · outside-hours messages clocked from next opening time</span>
             </div>
           </div>
         )}
