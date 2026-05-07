@@ -92,9 +92,8 @@ function detectLabels(labelStr) {
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
-function isAutomation(row) { return (row["Author name"] || "").toLowerCase().includes("automation"); }
-function isAgentMsg(row) { return !isAutomation(row) && (row["Falcon user name"] || "").trim() !== ""; }
-function isCustomerMsg(row) { return !isAutomation(row) && !isAgentMsg(row); }
+function isAgentMsg(row) { return (row["Author name"] || "").trim().toLowerCase() === "british gas"; }
+function isCustomerMsg(row) { return !isAgentMsg(row); }
 
 function calcMetrics(rows) {
   const convMap = {};
@@ -107,13 +106,15 @@ function calcMetrics(rows) {
     const sorted = [...msgs].sort((a, b) => new Date(a["Date created (UTC)"]) - new Date(b["Date created (UTC)"]));
     const allLabels = sorted.map((m) => m["Label"] || m["Labels"] || "").join(",");
     const { priorities, customerTypes } = detectLabels(allLabels);
-    for (let i = 0; i < sorted.length; i++) {
-      if (!isCustomerMsg(sorted[i])) continue;
-      const nextAgent = sorted.slice(i + 1).find(isAgentMsg);
-      if (!nextAgent) continue;
-      const minutes = (new Date(nextAgent["Date created (UTC)"]) - new Date(sorted[i]["Date created (UTC)"])) / 60000;
-      if (minutes >= 0 && minutes < 20160) responses.push({ minutes, priorities, customerTypes });
-    }
+    const firstCustomer = sorted.find(isCustomerMsg);
+    if (!firstCustomer) continue;
+    const firstCustomerTime = new Date(firstCustomer["Date created (UTC)"]);
+    const firstAgentReply = sorted.find(
+      (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) > firstCustomerTime
+    );
+    if (!firstAgentReply) continue;
+    const minutes = (new Date(firstAgentReply["Date created (UTC)"]) - firstCustomerTime) / 60000;
+    if (minutes >= 0 && minutes < 20160) responses.push({ minutes, priorities, customerTypes });
   }
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
 }
