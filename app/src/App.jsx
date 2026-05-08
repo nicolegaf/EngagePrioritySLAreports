@@ -97,7 +97,16 @@ function parseCSV(text) {
   });
 }
 
-function detectLabels(labelStr) {
+function parseDate(str) {
+  if (!str || !str.trim()) return new Date(NaN);
+  const s = str.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s);
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
+  if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]));
+  return new Date(s);
+}
+
+
   const parts = (labelStr || "").toUpperCase().split(",").map((l) => l.trim());
   const priorities = new Set(); const customerTypes = new Set();
   for (const part of parts) {
@@ -198,22 +207,20 @@ function calcMetrics(rows) {
   const responses = [];
   const abandoned = [];
   for (const msgs of Object.values(convMap)) {
-    const sorted = [...msgs].sort((a, b) => new Date(a["Date created (UTC)"]) - new Date(b["Date created (UTC)"]));
+    const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
     const allLabels = sorted.map((m) => m["Label"] || m["Labels"] || "").join(",");
     const { priorities, customerTypes } = detectLabels(allLabels);
 
     const firstCustomer = sorted.find(isCustomerMsg);
     if (!firstCustomer) continue;
-    const firstCustomerTime = new Date(firstCustomer["Date created (UTC)"]);
+    const firstCustomerTime = parseDate(firstCustomer["Date created (UTC)"]);
+    if (isNaN(firstCustomerTime)) continue;
     const firstAgentReply = sorted.find(
-      (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) >= firstCustomerTime
+      (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= firstCustomerTime
     );
     if (!firstAgentReply) {
-      // Skip if a BG message exists before the first customer message —
-      // this means the conversation was handled in a prior export window
-      // and we're only seeing a tail-end thank-you.
       const hasEarlierAgentMsg = sorted.some(
-        (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) < firstCustomerTime
+        (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) < firstCustomerTime
       );
       if (hasEarlierAgentMsg) continue;
 
@@ -238,7 +245,7 @@ function calcMetrics(rows) {
     }
 
     const ct = customerTypes[0] ?? null;
-    const minutes = bizHoursElapsed(firstCustomerTime, new Date(firstAgentReply["Date created (UTC)"]), ct);
+    const minutes = bizHoursElapsed(firstCustomerTime, parseDate(firstAgentReply["Date created (UTC)"]), ct);
     if (minutes < 20160) responses.push({ minutes, priorities, customerTypes });
   }
   return { responses, abandoned, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
@@ -322,7 +329,7 @@ function AbandonedTable({ abandoned }) {
     filter === "unlabelled" ? r.priorities.length === 0 && r.customerTypes.length === 0
     : r.priorities.includes(filter) || r.customerTypes.includes(filter)
   );
-  const fmtDate = (d) => d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
