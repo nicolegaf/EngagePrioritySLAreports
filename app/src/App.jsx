@@ -208,38 +208,37 @@ function calcMetrics(rows) {
   const abandoned = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
-    const allLabels = sorted.map((m) => m["Label"] || m["Labels"] || "").join(",");
-    const { priorities, customerTypes } = detectLabels(allLabels);
 
     const firstCustomer = sorted.find(isCustomerMsg);
     if (!firstCustomer) continue;
     const firstCustomerTime = parseDate(firstCustomer["Date created (UTC)"]);
     if (isNaN(firstCustomerTime)) continue;
+
+    // Labels must be on the first customer message itself to count
+    const { priorities, customerTypes } = detectLabels(
+      firstCustomer["Label"] || firstCustomer["Labels"] || ""
+    );
+    if (priorities.length === 0) continue;
     const firstAgentReply = sorted.find(
       (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= firstCustomerTime
     );
     if (!firstAgentReply) {
       const hasEarlierAgentMsg = sorted.some(
         (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) < firstCustomerTime
-        );
-        if (hasEarlierAgentMsg) continue;
-        if (priorities.length === 0 && customerTypes.length === 0) continue;
-        
-      
-      
+      );
+      if (hasEarlierAgentMsg) continue;
 
       const convId = firstCustomer["Conversation ID"];
       const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
         || `https://app.falcon.io/#/engage/${convId}/${convId}`;
       // Use labels from the first customer message only for display,
       // not aggregated from the whole conversation.
-      const { priorities: dispPriorities, customerTypes: dispCT } = { priorities, customerTypes };
       abandoned.push({
         id: convId,
         date: firstCustomerTime,
         content: firstCustomer["Content"] || "",
-        priorities: dispPriorities,
-        customerTypes: dispCT,
+        priorities,
+        customerTypes,
         network: firstCustomer["Network"] || "",
         url,
       });
