@@ -221,8 +221,12 @@ function calcMetrics(rows) {
     if (!firstAgentReply) {
       const hasEarlierAgentMsg = sorted.some(
         (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) < firstCustomerTime
-      );
-      if (hasEarlierAgentMsg) continue;
+        );
+        if (hasEarlierAgentMsg) continue;
+        if (priorities.length === 0 && customerTypes.length === 0) continue;
+        
+      
+      
 
       const convId = firstCustomer["Conversation ID"];
       const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
