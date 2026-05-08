@@ -18,6 +18,7 @@ const CT_META = {
   Credit:   { color: "#60A5FA", label: "Credit" },
 };
 
+// Social network names that appear in the Network column of every Engage export row.
 const ENGAGE_NETWORKS = new Set([
   "facebook", "twitter", "instagram", "youtube", "linkedin",
   "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay",
@@ -37,26 +38,40 @@ function splitBySep(line, sep) {
 function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
+
   const headerLine = rawLines[0];
   const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
+
+  // Find the Network column index from the header so we detect record boundaries
+  // correctly even when the file has a leading row-number column (e.g. "1,facebook,...").
   const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
+
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
     const parts = line.split(sep);
     if (networkColIdx > 0) {
+      // File has a leading row-number column. Real records always start with a plain
+      // integer in col 0. Continuation lines (embedded newline fragments) never do.
       const firstVal = (parts[0] || "").replace(/"/g, "").trim();
       if (!/^\d+$/.test(firstVal)) return false;
+      // Also confirm the network column has an alphabetic value (any network name)
       const netVal = (parts[networkColIdx] || "").replace(/"/g, "").toLowerCase().trim();
       return netVal.length > 0 && /^[a-z]+$/.test(netVal);
     }
     if (networkColIdx === 0) {
+      // Network is the first column — check it's a short alphabetic word
       const netVal = (parts[0] || "").replace(/"/g, "").toLowerCase().trim();
       return netVal.length > 0 && netVal.length <= 20 && /^[a-z]+$/.test(netVal);
     }
+    // No Network column found — check if line starts with a known network name
     const lower = line.trimStart().toLowerCase();
     return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
   };
+
+  // Reconstruct records: the Engage export embeds newlines inside message content,
+  // which splits one record across multiple raw lines. We rejoin continuation lines
+  // onto the previous record using the Network column as the record-start signal.
   let reconstructed = [];
   let current = null;
   for (let i = 1; i < rawLines.length; i++) {
@@ -70,7 +85,10 @@ function parseCSV(text) {
     }
   }
   if (current !== null) reconstructed.push(current);
+
+  // Fall back to simple line-by-line parsing if no network-name records were detected
   const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
+
   return sourceLines.map((line) => {
     const cols = splitBySep(line, sep);
     const row = {};
@@ -93,6 +111,8 @@ function detectLabels(labelStr) {
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
+// Business hours schedules indexed by day of week (0=Sun, 1=Mon ... 6=Sat).
+// Each entry is [openHour, closeHour] in UK local time, or null if closed.
 const BIZ_SCHEDULES = {
   PAYGE:    [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
   Credit:   [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
@@ -129,6 +149,7 @@ function makeUTC(year, month, day, ukHour, ukMinute) {
   return new Date(Date.UTC(year, month - 1, day, ukHour - off, ukMinute));
 }
 
+// Count business minutes between two UTC timestamps, using only hours the team is open.
 function bizHoursElapsed(startUTC, endUTC, customerType) {
   const schedule = BIZ_SCHEDULES[customerType];
   if (!schedule || endUTC <= startUTC) return Math.max(0, (endUTC - startUTC) / 60000);
@@ -153,9 +174,6 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
   return totalMinutes;
 }
 
-// Automation: check both Author name AND Falcon user name.
-// Cosmo chatbot has Author="British Gas" but Falcon user="Falcon Automation (Welcome Message)".
-// Away messages have Author="Falcon Automation (Away Message)".
 function isAutomation(row) {
   const author = (row["Author name"] || "").toLowerCase();
   const falcon = (row["Falcon user name"] || "").toLowerCase();
@@ -178,22 +196,52 @@ function calcMetrics(rows) {
     if (!convMap[id]) convMap[id] = []; convMap[id].push(row);
   }
   const responses = [];
+  const abandoned = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => new Date(a["Date created (UTC)"]) - new Date(b["Date created (UTC)"]));
     const allLabels = sorted.map((m) => m["Label"] || m["Labels"] || "").join(",");
     const { priorities, customerTypes } = detectLabels(allLabels);
+
     const firstCustomer = sorted.find(isCustomerMsg);
     if (!firstCustomer) continue;
     const firstCustomerTime = new Date(firstCustomer["Date created (UTC)"]);
     const firstAgentReply = sorted.find(
-      (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) > firstCustomerTime
+      (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) >= firstCustomerTime
     );
-    if (!firstAgentReply) continue;
+    if (!firstAgentReply) {
+      // Skip if a BG message exists before the first customer message —
+      // this means the conversation was handled in a prior export window
+      // and we're only seeing a tail-end thank-you.
+      const hasEarlierAgentMsg = sorted.some(
+        (m) => isAgentMsg(m) && new Date(m["Date created (UTC)"]) < firstCustomerTime
+      );
+      if (hasEarlierAgentMsg) continue;
+
+      const convId = firstCustomer["Conversation ID"];
+      const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
+        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
+      // Use labels from the first customer message only for display,
+      // not aggregated from the whole conversation.
+      const { priorities: dispPriorities, customerTypes: dispCT } = detectLabels(
+        firstCustomer["Label"] || firstCustomer["Labels"] || ""
+      );
+      abandoned.push({
+        id: convId,
+        date: firstCustomerTime,
+        content: firstCustomer["Content"] || "",
+        priorities: dispPriorities,
+        customerTypes: dispCT,
+        network: firstCustomer["Network"] || "",
+        url,
+      });
+      continue;
+    }
+
     const ct = customerTypes[0] ?? null;
     const minutes = bizHoursElapsed(firstCustomerTime, new Date(firstAgentReply["Date created (UTC)"]), ct);
     if (minutes < 20160) responses.push({ minutes, priorities, customerTypes });
   }
-  return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
+  return { responses, abandoned, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
 }
 
 function buildReport(responses) {
@@ -239,24 +287,85 @@ function SLACell({ data }) {
       <div style={{ display: "flex", gap: 14 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 30 min</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
           <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within30}/{data.total}</div>
           <PctBar pct={data.pct30} color={color30} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 60 min</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
           <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within60}/{data.total}</div>
           <PctBar pct={data.pct60} color={color60} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 90 min</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: color90, lineHeight: 1 }}>{data.pct90}%</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: color90, lineHeight: 1 }}>{data.pct90}%</div>
           <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within90}/{data.total}</div>
           <PctBar pct={data.pct90} color={color90} />
         </div>
       </div>
     </td>
+  );
+}
+
+function LabelPill({ label, color }) {
+  return (
+    <span style={{ background: color + "22", color, border: `1px solid ${color}55`, borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700, fontFamily: "monospace", marginRight: 4 }}>
+      {label}
+    </span>
+  );
+}
+
+function AbandonedTable({ abandoned }) {
+  const [filter, setFilter] = useState("all");
+  const filtered = filter === "all" ? abandoned : abandoned.filter((r) =>
+    filter === "unlabelled" ? r.priorities.length === 0 && r.customerTypes.length === 0
+    : r.priorities.includes(filter) || r.customerTypes.includes(filter)
+  );
+  const fmtDate = (d) => d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {["all", "P0", "P1", "P2", "PAYGE", "Services", "Credit", "unlabelled"].map((f) => (
+          <button key={f} onClick={() => setFilter(f)} style={{ padding: "5px 12px", borderRadius: 5, border: `1px solid ${filter === f ? C.accent : C.border}`, background: filter === f ? C.accent + "22" : "transparent", color: filter === f ? C.accent : C.textDim, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+            {f === "all" ? `All (${abandoned.length})` : f === "unlabelled" ? "Unlabelled" : f}
+          </button>
+        ))}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: C.bg }}>
+              {["Date", "Network", "Labels", "First Customer Message", "Link"].map((h) => (
+                <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={5} style={{ padding: "24px 14px", textAlign: "center", color: C.muted, fontSize: 13 }}>No conversations match this filter.</td></tr>
+            )}
+            {filtered.map((r, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
+                <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network}</td>
+                <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                  {r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p].color} />)}
+                  {r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct].color} />)}
+                  {r.priorities.length === 0 && r.customerTypes.length === 0 && <span style={{ color: C.muted, fontSize: 11 }}>none</span>}
+                </td>
+                <td style={{ padding: "10px 14px", color: C.text, maxWidth: 420, verticalAlign: "top" }}>
+                  <span title={r.content}>{r.content.length > 120 ? r.content.slice(0, 120) + "…" : r.content}</span>
+                </td>
+                <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                  <a href={r.url} target="_blank" rel="noreferrer" style={{ color: C.accent, fontSize: 12, textDecoration: "none" }}>Open ↗</a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -266,18 +375,21 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState("");
   const [report, setReport] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [abandoned, setAbandoned] = useState([]);
+  const [tab, setTab] = useState("sla");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setReport(null);
+    setCsvFile(file.name); setStatus("idle"); setReport(null); setAbandoned([]);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
         const rows = parseCSV(ev.target.result);
         if (!rows.length) throw new Error("No data rows found — check the file format.");
-        const { responses, totalConversations, totalMessages } = calcMetrics(rows);
+        const { responses, abandoned: ab, totalConversations, totalMessages } = calcMetrics(rows);
         setReport(buildReport(responses));
-        setSummary({ totalMessages, totalConversations, responses: responses.length });
+        setAbandoned(ab);
+        setSummary({ totalMessages, totalConversations, responses: responses.length, abandoned: ab.length });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
     };
@@ -286,7 +398,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
-      <div style={{ maxWidth: 1050, margin: "0 auto" }}>
+      <div style={{ maxWidth: 920, margin: "0 auto" }}>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
@@ -317,17 +429,28 @@ export default function App() {
               { label: "Messages", value: summary.totalMessages.toLocaleString() },
               { label: "Conversations", value: summary.totalConversations.toLocaleString() },
               { label: "Response Pairs", value: summary.responses.toLocaleString() },
-            ].map(({ label, value }) => (
-              <div key={label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 20px", flex: 1, minWidth: 130 }}>
+              { label: "No Reply", value: summary.abandoned.toLocaleString(), danger: true },
+            ].map(({ label, value, danger }) => (
+              <div key={label} style={{ background: C.surface, border: `1px solid ${danger ? C.danger + "55" : C.border}`, borderRadius: 8, padding: "14px 20px", flex: 1, minWidth: 130 }}>
                 <div style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: C.accent }}>{value}</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: danger ? C.danger : C.accent }}>{value}</div>
               </div>
             ))}
           </div>
         )}
 
-        {status === "done" && report && (
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+        {status === "done" && (
+          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+            {[{ id: "sla", label: "SLA Report" }, { id: "abandoned", label: `Unanswered (${abandoned.length})` }].map(({ id, label }) => (
+              <button key={id} onClick={() => setTab(id)} style={{ padding: "8px 18px", borderRadius: "6px 6px 0 0", border: `1px solid ${tab === id ? C.accent : C.border}`, borderBottom: tab === id ? `1px solid ${C.surface}` : `1px solid ${C.border}`, background: tab === id ? C.surface : "transparent", color: tab === id ? C.accent : C.textDim, fontSize: 13, fontWeight: tab === id ? 700 : 400, cursor: "pointer", fontFamily: "inherit" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {status === "done" && tab === "sla" && report && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
               <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30, 60 and 90 minutes · business hours only</div>
@@ -360,8 +483,16 @@ export default function App() {
               <span><span style={{ color: C.ok }}>■</span> ≥80% on target</span>
               <span><span style={{ color: C.warn }}>■</span> 50–79%</span>
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
-              <span style={{ marginLeft: "auto" }}>First human response · business hours elapsed · automation & irrelevant excluded</span>
+              <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only · automation &amp; irrelevant excluded</span>
             </div>
+          </div>
+        )}
+
+        {status === "done" && tab === "abandoned" && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", padding: "20px 24px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>Unanswered Conversations</div>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Conversations with a customer message but no British Gas reply in this export.</div>
+            <AbandonedTable abandoned={abandoned} />
           </div>
         )}
 
