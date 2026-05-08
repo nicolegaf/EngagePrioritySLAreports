@@ -18,7 +18,6 @@ const CT_META = {
   Credit:   { color: "#60A5FA", label: "Credit" },
 };
 
-// Social network names that appear in the Network column of every Engage export row.
 const ENGAGE_NETWORKS = new Set([
   "facebook", "twitter", "instagram", "youtube", "linkedin",
   "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay",
@@ -43,35 +42,25 @@ function parseCSV(text) {
   const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
 
-  // Find the Network column index from the header so we detect record boundaries
-  // correctly even when the file has a leading row-number column (e.g. "1,facebook,...").
   const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
 
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
     const parts = line.split(sep);
     if (networkColIdx > 0) {
-      // File has a leading row-number column. Real records always start with a plain
-      // integer in col 0. Continuation lines (embedded newline fragments) never do.
       const firstVal = (parts[0] || "").replace(/"/g, "").trim();
       if (!/^\d+$/.test(firstVal)) return false;
-      // Also confirm the network column has an alphabetic value (any network name)
       const netVal = (parts[networkColIdx] || "").replace(/"/g, "").toLowerCase().trim();
       return netVal.length > 0 && /^[a-z]+$/.test(netVal);
     }
     if (networkColIdx === 0) {
-      // Network is the first column — check it's a short alphabetic word
       const netVal = (parts[0] || "").replace(/"/g, "").toLowerCase().trim();
       return netVal.length > 0 && netVal.length <= 20 && /^[a-z]+$/.test(netVal);
     }
-    // No Network column found — check if line starts with a known network name
     const lower = line.trimStart().toLowerCase();
     return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
   };
 
-  // Reconstruct records: the Engage export embeds newlines inside message content,
-  // which splits one record across multiple raw lines. We rejoin continuation lines
-  // onto the previous record using the Network column as the record-start signal.
   let reconstructed = [];
   let current = null;
   for (let i = 1; i < rawLines.length; i++) {
@@ -86,7 +75,6 @@ function parseCSV(text) {
   }
   if (current !== null) reconstructed.push(current);
 
-  // Fall back to simple line-by-line parsing if no network-name records were detected
   const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
 
   return sourceLines.map((line) => {
@@ -120,8 +108,6 @@ function detectLabels(labelStr) {
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
-// Business hours schedules indexed by day of week (0=Sun, 1=Mon ... 6=Sat).
-// Each entry is [openHour, closeHour] in UK local time, or null if closed.
 const BIZ_SCHEDULES = {
   PAYGE:    [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
   Credit:   [null,   [8,20], [8,20], [8,20], [8,20], [8,20], [9,17]],
@@ -158,7 +144,6 @@ function makeUTC(year, month, day, ukHour, ukMinute) {
   return new Date(Date.UTC(year, month - 1, day, ukHour - off, ukMinute));
 }
 
-// Count business minutes between two UTC timestamps, using only hours the team is open.
 function bizHoursElapsed(startUTC, endUTC, customerType) {
   const schedule = BIZ_SCHEDULES[customerType];
   if (!schedule || endUTC <= startUTC) return Math.max(0, (endUTC - startUTC) / 60000);
@@ -192,7 +177,7 @@ function isIrrelevant(row) {
   return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant");
 }
 function isAgentMsg(row) {
-  return !isAutomation(row) && (row["Author name"] || "").trim().toLowerCase() === "british gas";
+  return (row["Author name"] || "").trim().toLowerCase() === "british gas";
 }
 function isCustomerMsg(row) {
   return !isAutomation(row) && !isAgentMsg(row) && !isIrrelevant(row);
@@ -214,11 +199,10 @@ function calcMetrics(rows) {
     const firstCustomerTime = parseDate(firstCustomer["Date created (UTC)"]);
     if (isNaN(firstCustomerTime)) continue;
 
-    // Labels must be on the first customer message itself to count
     const { priorities, customerTypes } = detectLabels(
       firstCustomer["Label"] || firstCustomer["Labels"] || ""
     );
-    if (priorities.length === 0) continue;
+    if (priorities.length === 0 || customerTypes.length === 0) continue;
     const firstAgentReply = sorted.find(
       (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= firstCustomerTime
     );
@@ -231,8 +215,6 @@ function calcMetrics(rows) {
       const convId = firstCustomer["Conversation ID"];
       const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
         || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-      // Use labels from the first customer message only for display,
-      // not aggregated from the whole conversation.
       abandoned.push({
         id: convId,
         date: firstCustomerTime,
@@ -491,7 +473,7 @@ export default function App() {
               <span><span style={{ color: C.ok }}>■</span> ≥80% on target</span>
               <span><span style={{ color: C.warn }}>■</span> 50–79%</span>
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
-              <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only · automation &amp; irrelevant excluded</span>
+              <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only · irrelevant excluded</span>
             </div>
           </div>
         )}
