@@ -106,7 +106,7 @@ function parseDate(str) {
   return new Date(s);
 }
 
-
+function detectLabels(labelStr) {
   const parts = (labelStr || "").toUpperCase().split(",").map((l) => l.trim());
   const priorities = new Set(); const customerTypes = new Set();
   for (const part of parts) {
