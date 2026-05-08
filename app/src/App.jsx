@@ -168,19 +168,15 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
   return totalMinutes;
 }
 
-function isAutomation(row) {
-  const author = (row["Author name"] || "").toLowerCase();
-  const falcon = (row["Falcon user name"] || "").toLowerCase();
-  return author.includes("automation") || falcon.includes("automation");
-}
 function isIrrelevant(row) {
   return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant");
 }
 function isAgentMsg(row) {
-  return (row["Author name"] || "").trim().toLowerCase() === "british gas";
+  const author = (row["Author name"] || "").trim().toLowerCase();
+  return author === "british gas" || author.includes("automation");
 }
 function isCustomerMsg(row) {
-  return !isAutomation(row) && !isAgentMsg(row) && !isIrrelevant(row);
+  return !isAgentMsg(row) && !isIrrelevant(row);
 }
 
 function calcMetrics(rows) {
