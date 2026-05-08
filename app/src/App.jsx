@@ -233,9 +233,7 @@ function calcMetrics(rows) {
         || `https://app.falcon.io/#/engage/${convId}/${convId}`;
       // Use labels from the first customer message only for display,
       // not aggregated from the whole conversation.
-      const { priorities: dispPriorities, customerTypes: dispCT } = detectLabels(
-        firstCustomer["Label"] || firstCustomer["Labels"] || ""
-      );
+      const { priorities: dispPriorities, customerTypes: dispCT } = { priorities, customerTypes };
       abandoned.push({
         id: convId,
         date: firstCustomerTime,
