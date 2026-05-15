@@ -204,9 +204,21 @@ function calcMetrics(rows) {
     );
     if (!firstAgentReply) continue;
 
+    const convId = firstCustomer["Conversation ID"];
+    const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
+      || `https://app.falcon.io/#/engage/${convId}/${convId}`;
+
     const ct = customerTypes[0] ?? null;
     const minutes = bizHoursElapsed(firstCustomerTime, parseDate(firstAgentReply["Date created (UTC)"]), ct);
-    if (minutes < 20160) responses.push({ minutes, priorities, customerTypes });
+    if (minutes < 20160) {
+      responses.push({
+        minutes, priorities, customerTypes,
+        date: firstCustomerTime,
+        content: firstCustomer["Content"] || "",
+        network: firstCustomer["Network"] || "",
+        url,
+      });
+    }
   }
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
 }
@@ -233,6 +245,19 @@ function buildReport(responses) {
   return table;
 }
 
+function fmtMins(m) {
+  if (m < 60) return `${Math.round(m)}m`;
+  const h = Math.floor(m / 60); const min = Math.round(m % 60);
+  return min > 0 ? `${h}h ${min}m` : `${h}h`;
+}
+
+function slaBadge(minutes) {
+  if (minutes <= 30) return { label: "Within 30m", color: C.ok };
+  if (minutes <= 60) return { label: "31–60m", color: C.warn };
+  if (minutes <= 90) return { label: "61–90m", color: C.warn };
+  return { label: "Over 90m", color: C.danger };
+}
+
 function PctBar({ pct, color }) {
   return (
     <div style={{ marginTop: 4 }}>
@@ -250,7 +275,7 @@ function SLACell({ data }) {
   const color90 = data.pct90 >= 80 ? C.ok : data.pct90 >= 50 ? C.warn : C.danger;
   return (
     <td style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{data.total} responses · avg {data.avgMins}m</div>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
       <div style={{ display: "flex", gap: 14 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 30 min</div>
@@ -275,33 +300,116 @@ function SLACell({ data }) {
   );
 }
 
+function LabelPill({ label, color }) {
+  return (
+    <span style={{ background: color + "22", color, border: `1px solid ${color}55`, borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700, fontFamily: "monospace", marginRight: 4 }}>
+      {label}
+    </span>
+  );
+}
+
+function BreachTable({ responses, priority }) {
+  const breaches = responses
+    .filter((r) => r.priorities.includes(priority) && r.minutes > 30)
+    .sort((a, b) => b.minutes - a.minutes);
+
+  const [ctFilter, setCtFilter] = useState("all");
+  const filtered = ctFilter === "all" ? breaches : breaches.filter((r) => r.customerTypes.includes(ctFilter));
+
+  const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: C.textDim, marginRight: 4 }}>Customer type:</span>
+        {["all", ...CUSTOMER_TYPES].map((f) => (
+          <button key={f} onClick={() => setCtFilter(f)} style={{ padding: "5px 12px", borderRadius: 5, border: `1px solid ${ctFilter === f ? C.accent : C.border}`, background: ctFilter === f ? C.accent + "22" : "transparent", color: ctFilter === f ? C.accent : C.textDim, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+            {f === "all" ? `All (${breaches.length})` : f}
+          </button>
+        ))}
+      </div>
+      {filtered.length === 0 ? (
+        <div style={{ padding: "32px 0", textAlign: "center", color: C.ok, fontSize: 14 }}>✓ All {priority} responses were within 30 minutes.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: C.bg }}>
+                {["Date", "Network", "Customer Type", "Response Time", "SLA Band", "First Customer Message", "Link"].map((h) => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, i) => {
+                const badge = slaBadge(r.minutes);
+                return (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
+                    <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network}</td>
+                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                      {r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)}
+                    </td>
+                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, color: badge.color }}>{fmtMins(r.minutes)}</td>
+                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                      <span style={{ background: badge.color + "22", color: badge.color, border: `1px solid ${badge.color}55`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>{badge.label}</span>
+                    </td>
+                    <td style={{ padding: "10px 14px", color: C.text, maxWidth: 380, verticalAlign: "top" }}>
+                      <span title={r.content}>{r.content.length > 100 ? r.content.slice(0, 100) + "…" : r.content}</span>
+                    </td>
+                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                      <a href={r.url} target="_blank" rel="noreferrer" style={{ color: C.accent, fontSize: 12, textDecoration: "none" }}>Open ↗</a>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [csvFile, setCsvFile] = useState(null);
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [report, setReport] = useState(null);
+  const [responses, setResponses] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [tab, setTab] = useState("sla");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setReport(null);
+    setCsvFile(file.name); setStatus("idle"); setReport(null); setResponses([]);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
         const rows = parseCSV(ev.target.result);
         if (!rows.length) throw new Error("No data rows found — check the file format.");
-        const { responses, totalConversations, totalMessages } = calcMetrics(rows);
-        setReport(buildReport(responses));
-        setSummary({ totalMessages, totalConversations, responses: responses.length });
+        const { responses: resp, totalConversations, totalMessages } = calcMetrics(rows);
+        setReport(buildReport(resp));
+        setResponses(resp);
+        setSummary({ totalMessages, totalConversations, responses: resp.length });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
     };
     reader.readAsText(file);
   }, []);
 
+  const tabs = [
+    { id: "sla", label: "SLA Report" },
+    ...PRIORITIES.map((p) => ({
+      id: p,
+      label: `${p} Breaches (${responses.filter((r) => r.priorities.includes(p) && r.minutes > 30).length})`,
+      color: PRIORITY_META[p].color,
+    })),
+  ];
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
-      <div style={{ maxWidth: 920, margin: "0 auto" }}>
+      <div style={{ maxWidth: 980, margin: "0 auto" }}>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
@@ -341,8 +449,18 @@ export default function App() {
           </div>
         )}
 
-        {status === "done" && report && (
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+        {status === "done" && (
+          <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+            {tabs.map(({ id, label, color }) => (
+              <button key={id} onClick={() => setTab(id)} style={{ padding: "8px 18px", borderRadius: "6px 6px 0 0", border: `1px solid ${tab === id ? (color || C.accent) : C.border}`, borderBottom: tab === id ? `1px solid ${C.surface}` : `1px solid ${C.border}`, background: tab === id ? C.surface : "transparent", color: tab === id ? (color || C.accent) : C.textDim, fontSize: 13, fontWeight: tab === id ? 700 : 400, cursor: "pointer", fontFamily: "inherit" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {status === "done" && tab === "sla" && report && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
               <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30, 60 and 90 minutes · business hours only</div>
@@ -377,6 +495,17 @@ export default function App() {
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
               <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only · irrelevant excluded</span>
             </div>
+          </div>
+        )}
+
+        {status === "done" && PRIORITIES.includes(tab) && (
+          <div style={{ background: C.surface, border: `1px solid ${PRIORITY_META[tab].color}55`, borderRadius: "0 6px 10px 10px", padding: "20px 24px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+              <span style={{ background: PRIORITY_META[tab].color + "22", color: PRIORITY_META[tab].color, border: `1px solid ${PRIORITY_META[tab].color}55`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{tab}</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breaches — responses over 30 minutes</div>
+            </div>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Sorted by longest response time first. These conversations are included in the SLA report above.</div>
+            <BreachTable responses={responses} priority={tab} />
           </div>
         )}
 
