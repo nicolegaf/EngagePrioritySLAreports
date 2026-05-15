@@ -186,7 +186,6 @@ function calcMetrics(rows) {
     if (!convMap[id]) convMap[id] = []; convMap[id].push(row);
   }
   const responses = [];
-  const abandoned = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
 
@@ -199,35 +198,17 @@ function calcMetrics(rows) {
       firstCustomer["Label"] || firstCustomer["Labels"] || ""
     );
     if (priorities.length === 0 || customerTypes.length === 0) continue;
+
     const firstAgentReply = sorted.find(
       (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= firstCustomerTime
     );
-    if (!firstAgentReply) {
-      const hasEarlierAgentMsg = sorted.some(
-        (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) < firstCustomerTime
-      );
-      if (hasEarlierAgentMsg) continue;
-
-      const convId = firstCustomer["Conversation ID"];
-      const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
-        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-      abandoned.push({
-        id: convId,
-        date: firstCustomerTime,
-        content: firstCustomer["Content"] || "",
-        priorities,
-        customerTypes,
-        network: firstCustomer["Network"] || "",
-        url,
-      });
-      continue;
-    }
+    if (!firstAgentReply) continue;
 
     const ct = customerTypes[0] ?? null;
     const minutes = bizHoursElapsed(firstCustomerTime, parseDate(firstAgentReply["Date created (UTC)"]), ct);
     if (minutes < 20160) responses.push({ minutes, priorities, customerTypes });
   }
-  return { responses, abandoned, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
+  return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
 }
 
 function buildReport(responses) {
@@ -294,88 +275,24 @@ function SLACell({ data }) {
   );
 }
 
-function LabelPill({ label, color }) {
-  return (
-    <span style={{ background: color + "22", color, border: `1px solid ${color}55`, borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700, fontFamily: "monospace", marginRight: 4 }}>
-      {label}
-    </span>
-  );
-}
-
-function AbandonedTable({ abandoned }) {
-  const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? abandoned : abandoned.filter((r) =>
-    filter === "unlabelled" ? r.priorities.length === 0 && r.customerTypes.length === 0
-    : r.priorities.includes(filter) || r.customerTypes.includes(filter)
-  );
-  const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {["all", "P0", "P1", "P2", "PAYGE", "Services", "Credit", "unlabelled"].map((f) => (
-          <button key={f} onClick={() => setFilter(f)} style={{ padding: "5px 12px", borderRadius: 5, border: `1px solid ${filter === f ? C.accent : C.border}`, background: filter === f ? C.accent + "22" : "transparent", color: filter === f ? C.accent : C.textDim, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-            {f === "all" ? `All (${abandoned.length})` : f === "unlabelled" ? "Unlabelled" : f}
-          </button>
-        ))}
-      </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-          <thead>
-            <tr style={{ background: C.bg }}>
-              {["Date", "Network", "Labels", "First Customer Message", "Link"].map((h) => (
-                <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 && (
-              <tr><td colSpan={5} style={{ padding: "24px 14px", textAlign: "center", color: C.muted, fontSize: 13 }}>No conversations match this filter.</td></tr>
-            )}
-            {filtered.map((r, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
-                <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network}</td>
-                <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                  {r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p].color} />)}
-                  {r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct].color} />)}
-                  {r.priorities.length === 0 && r.customerTypes.length === 0 && <span style={{ color: C.muted, fontSize: 11 }}>none</span>}
-                </td>
-                <td style={{ padding: "10px 14px", color: C.text, maxWidth: 420, verticalAlign: "top" }}>
-                  <span title={r.content}>{r.content.length > 120 ? r.content.slice(0, 120) + "…" : r.content}</span>
-                </td>
-                <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                  <a href={r.url} target="_blank" rel="noreferrer" style={{ color: C.accent, fontSize: 12, textDecoration: "none" }}>Open ↗</a>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [csvFile, setCsvFile] = useState(null);
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [report, setReport] = useState(null);
   const [summary, setSummary] = useState(null);
-  const [abandoned, setAbandoned] = useState([]);
-  const [tab, setTab] = useState("sla");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setReport(null); setAbandoned([]);
+    setCsvFile(file.name); setStatus("idle"); setReport(null);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
         const rows = parseCSV(ev.target.result);
         if (!rows.length) throw new Error("No data rows found — check the file format.");
-        const { responses, abandoned: ab, totalConversations, totalMessages } = calcMetrics(rows);
+        const { responses, totalConversations, totalMessages } = calcMetrics(rows);
         setReport(buildReport(responses));
-        setAbandoned(ab);
-        setSummary({ totalMessages, totalConversations, responses: responses.length, abandoned: ab.length });
+        setSummary({ totalMessages, totalConversations, responses: responses.length });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
     };
@@ -415,28 +332,17 @@ export default function App() {
               { label: "Messages", value: summary.totalMessages.toLocaleString() },
               { label: "Conversations", value: summary.totalConversations.toLocaleString() },
               { label: "Response Pairs", value: summary.responses.toLocaleString() },
-              { label: "No Reply", value: summary.abandoned.toLocaleString(), danger: true },
-            ].map(({ label, value, danger }) => (
-              <div key={label} style={{ background: C.surface, border: `1px solid ${danger ? C.danger + "55" : C.border}`, borderRadius: 8, padding: "14px 20px", flex: 1, minWidth: 130 }}>
+            ].map(({ label, value }) => (
+              <div key={label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 20px", flex: 1, minWidth: 130 }}>
                 <div style={{ fontSize: 11, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: danger ? C.danger : C.accent }}>{value}</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: C.accent }}>{value}</div>
               </div>
             ))}
           </div>
         )}
 
-        {status === "done" && (
-          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
-            {[{ id: "sla", label: "SLA Report" }, { id: "abandoned", label: `Unanswered (${abandoned.length})` }].map(({ id, label }) => (
-              <button key={id} onClick={() => setTab(id)} style={{ padding: "8px 18px", borderRadius: "6px 6px 0 0", border: `1px solid ${tab === id ? C.accent : C.border}`, borderBottom: tab === id ? `1px solid ${C.surface}` : `1px solid ${C.border}`, background: tab === id ? C.surface : "transparent", color: tab === id ? C.accent : C.textDim, fontSize: 13, fontWeight: tab === id ? 700 : 400, cursor: "pointer", fontFamily: "inherit" }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {status === "done" && tab === "sla" && report && (
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
+        {status === "done" && report && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
               <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30, 60 and 90 minutes · business hours only</div>
@@ -471,14 +377,6 @@ export default function App() {
               <span><span style={{ color: C.danger }}>■</span> &lt;50%</span>
               <span style={{ marginLeft: "auto" }}>First response · business hours elapsed only · irrelevant excluded</span>
             </div>
-          </div>
-        )}
-
-        {status === "done" && tab === "abandoned" && (
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", padding: "20px 24px" }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>Unanswered Conversations</div>
-            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Conversations with a customer message but no British Gas reply in this export.</div>
-            <AbandonedTable abandoned={abandoned} />
           </div>
         )}
 
