@@ -196,7 +196,6 @@ function calcMetrics(rows) {
         if (!isCustomerMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
-        // Only start a new SLA if there's been no agent reply in this thread within the last 24h
         const hasRecentAgentReply = sorted.some(
           (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
                  t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000
@@ -239,24 +238,28 @@ function calcMetrics(rows) {
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
 }
 
+function calcStats(matching) {
+  if (!matching.length) return null;
+  const w30 = matching.filter((r) => r.minutes <= 30).length;
+  const w60 = matching.filter((r) => r.minutes <= 60).length;
+  const w90 = matching.filter((r) => r.minutes <= 90).length;
+  return {
+    total: matching.length, within30: w30, within60: w60, within90: w90,
+    pct30: Math.round((w30 / matching.length) * 100),
+    pct60: Math.round((w60 / matching.length) * 100),
+    pct90: Math.round((w90 / matching.length) * 100),
+    avgMins: Math.round(matching.reduce((s, r) => s + r.minutes, 0) / matching.length),
+  };
+}
+
 function buildReport(responses) {
   const table = {};
   for (const p of PRIORITIES) {
     table[p] = {};
     for (const ct of CUSTOMER_TYPES) {
-      const matching = responses.filter((r) => r.priorities.includes(p) && r.customerTypes.includes(ct));
-      if (!matching.length) { table[p][ct] = null; continue; }
-      const w30 = matching.filter((r) => r.minutes <= 30).length;
-      const w60 = matching.filter((r) => r.minutes <= 60).length;
-      const w90 = matching.filter((r) => r.minutes <= 90).length;
-      table[p][ct] = {
-        total: matching.length, within30: w30, within60: w60, within90: w90,
-        pct30: Math.round((w30 / matching.length) * 100),
-        pct60: Math.round((w60 / matching.length) * 100),
-        pct90: Math.round((w90 / matching.length) * 100),
-        avgMins: Math.round(matching.reduce((s, r) => s + r.minutes, 0) / matching.length),
-      };
+      table[p][ct] = calcStats(responses.filter((r) => r.priorities.includes(p) && r.customerTypes.includes(ct)));
     }
+    table[p]["Total"] = calcStats(responses.filter((r) => r.priorities.includes(p)));
   }
   return table;
 }
@@ -508,6 +511,7 @@ export default function App() {
                     {CUSTOMER_TYPES.map((ct) => (
                       <th key={ct} style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: CT_META[ct].color, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{CT_META[ct].label}</th>
                     ))}
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: C.accent, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -519,6 +523,7 @@ export default function App() {
                         </span>
                       </td>
                       {CUSTOMER_TYPES.map((ct) => <SLACell key={ct} data={report[p][ct]} />)}
+                      <SLACell data={report[p]["Total"]} />
                     </tr>
                   ))}
                 </tbody>
