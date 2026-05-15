@@ -192,13 +192,15 @@ function calcMetrics(rows) {
     let searchFrom = new Date(0);
 
     while (true) {
-      const customer = sorted.find((m) => {
-        if (!isCustomerMsg(m)) return false;
-        const t = parseDate(m["Date created (UTC)"]);
-        if (isNaN(t) || t <= searchFrom) return false;
-        const { priorities, customerTypes } = detectLabels(m["Label"] || m["Labels"] || "");
-        return priorities.length > 0 && customerTypes.length > 0;
-      });
+     const customer = sorted.find((m) => {
+     if (!isCustomerMsg(m)) return false;
+     const t = parseDate(m["Date created (UTC)"]);
+     if (isNaN(t) || t <= searchFrom) return false;
+    // After the first issue, only start a new SLA if >24h since the last agent reply
+     if (searchFrom.getTime() > 0 && t - searchFrom < 24 * 60 * 60 * 1000) return false;
+     const { priorities, customerTypes } = detectLabels(m["Label"] || m["Labels"] || "");
+     return priorities.length > 0 && customerTypes.length > 0;
+  });
       if (!customer) break;
 
       const customerTime = parseDate(customer["Date created (UTC)"]);
