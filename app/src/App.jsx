@@ -173,7 +173,7 @@ function isIrrelevant(row) {
 }
 function isAgentMsg(row) {
   const author = (row["Author name"] || "").trim().toLowerCase();
-  return author === "british gas" || author.includes("automation");
+  return author.includes("british gas") || author.includes("automation");
 }
 function isCustomerMsg(row) {
   return !isAgentMsg(row) && !isIrrelevant(row);
