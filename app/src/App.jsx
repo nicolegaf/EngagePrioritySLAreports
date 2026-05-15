@@ -182,42 +182,52 @@ function isCustomerMsg(row) {
 function calcMetrics(rows) {
   const convMap = {};
   for (const row of rows) {
-    const id = row["Conversation ID"]; if (!id) continue;
+    const id = row["Parent comment ID"] || row["Conversation ID"]; if (!id) continue;
     if (!convMap[id]) convMap[id] = []; convMap[id].push(row);
   }
   const responses = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
 
-    const firstCustomer = sorted.find(isCustomerMsg);
-    if (!firstCustomer) continue;
-    const firstCustomerTime = parseDate(firstCustomer["Date created (UTC)"]);
-    if (isNaN(firstCustomerTime)) continue;
+    let searchFrom = new Date(0);
 
-    const { priorities, customerTypes } = detectLabels(
-      firstCustomer["Label"] || firstCustomer["Labels"] || ""
-    );
-    if (priorities.length === 0 || customerTypes.length === 0) continue;
-
-    const firstAgentReply = sorted.find(
-      (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= firstCustomerTime
-    );
-    if (!firstAgentReply) continue;
-
-    const convId = firstCustomer["Conversation ID"];
-    const url = firstCustomer["URL"] || firstCustomer["Permalink"] || firstCustomer["Falcon URL"]
-      || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-
-    const ct = customerTypes[0] ?? null;
-    const minutes = bizHoursElapsed(firstCustomerTime, parseDate(firstAgentReply["Date created (UTC)"]), ct);
-    if (minutes < 20160) {
-      responses.push({
-        minutes, priorities, customerTypes,
-        date: firstCustomerTime,
-        content: firstCustomer["Content"] || "",
-        network: firstCustomer["Network"] || "",
-        url,
+    while (true) {
+      const customer = sorted.find((m) => {
+        if (!isCustomerMsg(m)) return false;
+        const t = parseDate(m["Date created (UTC)"]);
+        if (isNaN(t) || t <= searchFrom) return false;
+        const { priorities, customerTypes } = detectLabels(m["Label"] || m["Labels"] || "");
+        return priorities.length > 0 && customerTypes.length > 0;
       });
+      if (!customer) break;
+
+      const customerTime = parseDate(customer["Date created (UTC)"]);
+      const { priorities, customerTypes } = detectLabels(customer["Label"] || customer["Labels"] || "");
+
+      const agentReply = sorted.find(
+        (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= customerTime
+      );
+      if (!agentReply) break;
+
+      const agentTime = parseDate(agentReply["Date created (UTC)"]);
+      const convId = customer["Conversation ID"];
+      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
+        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
+
+      const ct = customerTypes[0] ?? null;
+      const minutes = bizHoursElapsed(customerTime, agentTime, ct);
+      if (minutes < 20160) {
+        responses.push({
+          id: `${url}-${customerTime.getTime()}`,
+          minutes, priorities, customerTypes,
+          date: customerTime,
+          content: customer["Content"] || "",
+          network: customer["Network"] || "",
+          url,
+        });
+      }
+
+      searchFrom = agentTime;
     }
   }
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
@@ -308,13 +318,14 @@ function LabelPill({ label, color }) {
   );
 }
 
-function BreachTable({ responses, priority }) {
+function BreachTable({ responses, priority, excluded, onExclude, onRestore }) {
   const breaches = responses
     .filter((r) => r.priorities.includes(priority) && r.minutes > 30)
     .sort((a, b) => b.minutes - a.minutes);
 
   const [ctFilter, setCtFilter] = useState("all");
-  const filtered = ctFilter === "all" ? breaches : breaches.filter((r) => r.customerTypes.includes(ctFilter));
+  const visible = ctFilter === "all" ? breaches : breaches.filter((r) => r.customerTypes.includes(ctFilter));
+  const excludedInTab = breaches.filter((r) => excluded.has(r.id)).length;
 
   const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -327,24 +338,31 @@ function BreachTable({ responses, priority }) {
             {f === "all" ? `All (${breaches.length})` : f}
           </button>
         ))}
+        {excludedInTab > 0 && (
+          <span style={{ marginLeft: 8, fontSize: 12, color: C.muted }}>
+            {excludedInTab} excluded ·{" "}
+            <button onClick={() => breaches.forEach((r) => onRestore(r.id))} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Reset</button>
+          </span>
+        )}
       </div>
-      {filtered.length === 0 ? (
+      {visible.length === 0 ? (
         <div style={{ padding: "32px 0", textAlign: "center", color: C.ok, fontSize: 14 }}>✓ All {priority} responses were within 30 minutes.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
             <thead>
               <tr style={{ background: C.bg }}>
-                {["Date", "Network", "Customer Type", "Response Time", "SLA Band", "First Customer Message", "Link"].map((h) => (
+                {["Date", "Network", "Customer Type", "Response Time", "SLA Band", "First Customer Message", "Link", ""].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r, i) => {
+              {visible.map((r) => {
                 const badge = slaBadge(r.minutes);
+                const isExcluded = excluded.has(r.id);
                 return (
-                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}`, opacity: isExcluded ? 0.4 : 1 }}>
                     <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
                     <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network}</td>
                     <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
@@ -359,6 +377,12 @@ function BreachTable({ responses, priority }) {
                     </td>
                     <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
                       <a href={r.url} target="_blank" rel="noreferrer" style={{ color: C.accent, fontSize: 12, textDecoration: "none" }}>Open ↗</a>
+                    </td>
+                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                      {isExcluded
+                        ? <button onClick={() => onRestore(r.id)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 4, color: C.textDim, fontSize: 11, cursor: "pointer", padding: "2px 8px", fontFamily: "inherit" }}>Restore</button>
+                        : <button onClick={() => onExclude(r.id)} style={{ background: "none", border: `1px solid ${C.danger}55`, borderRadius: 4, color: C.danger, fontSize: 11, cursor: "pointer", padding: "2px 8px", fontFamily: "inherit" }}>Exclude</button>
+                      }
                     </td>
                   </tr>
                 );
@@ -375,28 +399,33 @@ export default function App() {
   const [csvFile, setCsvFile] = useState(null);
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
-  const [report, setReport] = useState(null);
-  const [responses, setResponses] = useState([]);
+  const [allResponses, setAllResponses] = useState([]);
+  const [excluded, setExcluded] = useState(new Set());
   const [summary, setSummary] = useState(null);
   const [tab, setTab] = useState("sla");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setReport(null); setResponses([]);
+    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set());
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
         const rows = parseCSV(ev.target.result);
         if (!rows.length) throw new Error("No data rows found — check the file format.");
         const { responses: resp, totalConversations, totalMessages } = calcMetrics(rows);
-        setReport(buildReport(resp));
-        setResponses(resp);
+        setAllResponses(resp);
         setSummary({ totalMessages, totalConversations, responses: resp.length });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
     };
     reader.readAsText(file);
   }, []);
+
+  const handleExclude = useCallback((id) => setExcluded((prev) => new Set([...prev, id])), []);
+  const handleRestore = useCallback((id) => setExcluded((prev) => { const n = new Set(prev); n.delete(id); return n; }), []);
+
+  const responses = allResponses.filter((r) => !excluded.has(r.id));
+  const report = status === "done" ? buildReport(responses) : null;
 
   const tabs = [
     { id: "sla", label: "SLA Report" },
@@ -505,7 +534,7 @@ export default function App() {
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breaches — responses over 30 minutes</div>
             </div>
             <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Sorted by longest response time first. These conversations are included in the SLA report above.</div>
-            <BreachTable responses={responses} priority={tab} />
+            <BreachTable responses={allResponses} priority={tab} excluded={excluded} onExclude={handleExclude} onRestore={handleRestore} />
           </div>
         )}
 
