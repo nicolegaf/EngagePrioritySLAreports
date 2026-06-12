@@ -179,7 +179,27 @@ function isCustomerMsg(row) {
   return !isAgentMsg(row) && !isIrrelevant(row);
 }
 
+function getReportMonth(rows) {
+  for (const row of rows) {
+    const t = parseDate(row["Date created (UTC)"]);
+    if (!isNaN(t)) return { year: t.getUTCFullYear(), month: t.getUTCMonth() };
+  }
+  return null;
+}
+
+function inReportMonth(date, reportMonth) {
+  return date.getUTCFullYear() === reportMonth.year && date.getUTCMonth() === reportMonth.month;
+}
+
+function inAllowedAgentMonth(date, reportMonth) {
+  const nextMonth = reportMonth.month === 11
+    ? { year: reportMonth.year + 1, month: 0 }
+    : { year: reportMonth.year, month: reportMonth.month + 1 };
+  return inReportMonth(date, reportMonth) || inReportMonth(date, nextMonth);
+}
+
 function calcMetrics(rows) {
+  const reportMonth = getReportMonth(rows);
   const convMap = {};
   for (const row of rows) {
     const id = row["Parent comment ID"] || row["Conversation ID"]; if (!id) continue;
@@ -196,6 +216,7 @@ function calcMetrics(rows) {
         if (!isCustomerMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
+        if (reportMonth && !inReportMonth(t, reportMonth)) return false;
         const hasRecentAgentReply = sorted.some(
           (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
                  t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000
@@ -209,9 +230,13 @@ function calcMetrics(rows) {
       const customerTime = parseDate(customer["Date created (UTC)"]);
       const { priorities, customerTypes } = detectLabels(customer["Label"] || customer["Labels"] || "");
 
-      const agentReply = sorted.find(
-        (m) => isAgentMsg(m) && parseDate(m["Date created (UTC)"]) >= customerTime
-      );
+      const agentReply = sorted.find((m) => {
+        if (!isAgentMsg(m)) return false;
+        const t = parseDate(m["Date created (UTC)"]);
+        if (t < customerTime) return false;
+        if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
+        return true;
+      });
       if (!agentReply) break;
 
       const agentTime = parseDate(agentReply["Date created (UTC)"]);
@@ -235,7 +260,11 @@ function calcMetrics(rows) {
       searchFrom = agentTime;
     }
   }
-  return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length };
+  const reportMonthLabel = reportMonth
+    ? new Date(Date.UTC(reportMonth.year, reportMonth.month, 1))
+        .toLocaleString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
+    : null;
+  return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length, reportMonthLabel };
 }
 
 function calcStats(matching) {
@@ -421,9 +450,9 @@ export default function App() {
       try {
         const rows = parseCSV(ev.target.result);
         if (!rows.length) throw new Error("No data rows found — check the file format.");
-        const { responses: resp, totalConversations, totalMessages } = calcMetrics(rows);
+        const { responses: resp, totalConversations, totalMessages, reportMonthLabel } = calcMetrics(rows);
         setAllResponses(resp);
-        setSummary({ totalMessages, totalConversations, responses: resp.length });
+        setSummary({ totalMessages, totalConversations, responses: resp.length, reportMonthLabel });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
     };
@@ -475,6 +504,7 @@ export default function App() {
         {status === "done" && summary && (
           <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
             {[
+              { label: "Report Month", value: summary.reportMonthLabel || "—" },
               { label: "Messages", value: summary.totalMessages.toLocaleString() },
               { label: "Conversations", value: summary.totalConversations.toLocaleString() },
               { label: "Response Pairs", value: summary.responses.toLocaleString() },
