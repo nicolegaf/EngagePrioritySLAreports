@@ -216,6 +216,7 @@ function calcMetrics(rows) {
         if (!isCustomerMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
+        // Only count customer messages from the report month
         if (reportMonth && !inReportMonth(t, reportMonth)) return false;
         const hasRecentAgentReply = sorted.some(
           (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
@@ -234,6 +235,7 @@ function calcMetrics(rows) {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (t < customerTime) return false;
+        // Allow agent replies from the report month or the following month
         if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
         return true;
       });
@@ -265,6 +267,125 @@ function calcMetrics(rows) {
         .toLocaleString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
     : null;
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length, reportMonthLabel };
+}
+
+function calcJacksData(rows, reportMonth) {
+  const convMap = {};
+  for (const row of rows) {
+    const id = row["Parent comment ID"] || row["Conversation ID"]; if (!id) continue;
+    if (!convMap[id]) convMap[id] = []; convMap[id].push(row);
+  }
+  const items = [];
+  for (const msgs of Object.values(convMap)) {
+    const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
+    let searchFrom = new Date(0);
+    while (true) {
+      const customer = sorted.find((m) => {
+        if (!isCustomerMsg(m)) return false;
+        const t = parseDate(m["Date created (UTC)"]);
+        if (isNaN(t) || t <= searchFrom) return false;
+        if (reportMonth && !inReportMonth(t, reportMonth)) return false;
+        const hasRecentAgentReply = sorted.some(
+          (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
+                 t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000
+        );
+        return !hasRecentAgentReply;
+      });
+      if (!customer) break;
+      const customerTime = parseDate(customer["Date created (UTC)"]);
+      const { customerTypes } = detectLabels(customer["Label"] || customer["Labels"] || "");
+      const agentReply = sorted.find((m) => {
+        if (!isAgentMsg(m)) return false;
+        const t = parseDate(m["Date created (UTC)"]);
+        if (t < customerTime) return false;
+        if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
+        return true;
+      });
+      if (agentReply) {
+        const agentTime = parseDate(agentReply["Date created (UTC)"]);
+        const ct = customerTypes[0] ?? null;
+        const minutes = bizHoursElapsed(customerTime, agentTime, ct);
+        items.push({ answered: true, minutes, customerTypes });
+        searchFrom = agentTime;
+      } else {
+        items.push({ answered: false, minutes: null, customerTypes });
+        break;
+      }
+    }
+  }
+  return items;
+}
+
+function jacksStats(items, ctFilter) {
+  const filtered = ctFilter ? items.filter((r) => r.customerTypes.includes(ctFilter)) : items;
+  const received = filtered.length;
+  const answeredItems = filtered.filter((r) => r.answered);
+  const within30 = answeredItems.filter((r) => r.minutes <= 30).length;
+  const outside30 = answeredItems.filter((r) => r.minutes > 30).length;
+  const notAnswered = filtered.filter((r) => !r.answered).length;
+  const answered = answeredItems.length;
+  const pct = (n) => received > 0 ? Math.round((n / received) * 100 * 10) / 10 : 0;
+  return { received, answered, within30, outside30, notAnswered, pct };
+}
+
+function JacksTab({ items }) {
+  const cols = [
+    { key: null,        label: "All contacts" },
+    { key: "Credit",    label: "Credit energy" },
+    { key: "PAYGE",     label: "PAYGE" },
+    { key: "Services",  label: "Services" },
+  ];
+  const data = cols.map(({ key, label }) => ({ label, ...jacksStats(items, key) }));
+
+  const rowStyle = (bold) => ({
+    display: "contents",
+    fontWeight: bold ? 700 : 400,
+  });
+  const cell = (content, bold, sub, color) => ({
+    padding: sub ? "8px 16px 8px 28px" : "12px 16px",
+    borderBottom: `1px solid ${C.border}`,
+    fontSize: bold ? 13 : 12,
+    fontWeight: bold ? 700 : 400,
+    color: color || (sub ? C.textDim : C.text),
+    whiteSpace: "nowrap",
+  });
+
+  const rows = [
+    { label: "Received",               bold: true,  sub: false, val: (d) => d.received.toLocaleString() },
+    { label: "Answered",               bold: true,  sub: false, val: (d) => `${d.answered.toLocaleString()} (${d.pct(d.answered)}%)` },
+    { label: "↳ Within 30 biz mins",   bold: false, sub: true,  val: (d) => `${d.within30.toLocaleString()} (${d.pct(d.within30)}%)` },
+    { label: "↳ Outside 30 biz mins",  bold: false, sub: true,  val: (d) => `${d.outside30.toLocaleString()} (${d.pct(d.outside30)}%)` },
+    { label: "Not answered",           bold: true,  sub: false, val: (d) => `${d.notAnswered.toLocaleString()} (${d.pct(d.notAnswered)}%)` },
+    { label: "% Answered",             bold: true,  sub: false, val: (d) => `${d.pct(d.answered)}%` },
+    { label: "% Within 30 biz mins",   bold: true,  sub: false, val: (d) => `${d.pct(d.within30)}%` },
+    { label: "% Outside 30 biz mins",  bold: true,  sub: false, val: (d) => `${d.pct(d.outside30)}%` },
+    { label: "% Not answered",         bold: true,  sub: false, val: (d) => `${d.pct(d.notAnswered)}%` },
+  ];
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: C.bg }}>
+            <th style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", minWidth: 200 }}></th>
+            {data.map((d) => (
+              <th key={d.label} style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: C.accent, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{d.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ label, bold, sub, val }) => (
+            <tr key={label} style={{ background: sub ? C.bg + "88" : "transparent" }}>
+              <td style={cell(null, bold, sub)}>{label}</td>
+              {data.map((d) => (
+                <td key={d.label} style={cell(val(d), bold, sub)}>{val(d)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function calcStats(matching) {
@@ -440,18 +561,21 @@ export default function App() {
   const [allResponses, setAllResponses] = useState([]);
   const [excluded, setExcluded] = useState(new Set());
   const [summary, setSummary] = useState(null);
+  const [jacksData, setJacksData] = useState([]);
   const [tab, setTab] = useState("sla");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set());
+    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set()); setJacksData([]);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
         const rows = parseCSV(ev.target.result);
         if (!rows.length) throw new Error("No data rows found — check the file format.");
         const { responses: resp, totalConversations, totalMessages, reportMonthLabel } = calcMetrics(rows);
+        const reportMonth = getReportMonth(rows);
         setAllResponses(resp);
+        setJacksData(calcJacksData(rows, reportMonth));
         setSummary({ totalMessages, totalConversations, responses: resp.length, reportMonthLabel });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
@@ -472,6 +596,7 @@ export default function App() {
       label: `${p} Breaches (${responses.filter((r) => r.priorities.includes(p) && r.minutes > 30).length})`,
       color: PRIORITY_META[p].color,
     })),
+    { id: "jacks", label: "Jack's tab" },
   ];
 
   return (
@@ -576,6 +701,16 @@ export default function App() {
             </div>
             <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Sorted by longest response time first. These conversations are included in the SLA report above.</div>
             <BreachTable responses={allResponses} priority={tab} excluded={excluded} onExclude={handleExclude} onRestore={handleRestore} />
+          </div>
+        )}
+
+        {status === "done" && tab === "jacks" && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
+            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Jack's Tab — All First Messages</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>All first customer messages from the report month · irrespective of priority · business hours only</div>
+            </div>
+            <JacksTab items={jacksData} />
           </div>
         )}
 
