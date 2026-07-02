@@ -327,11 +327,16 @@ function jacksStats(items, ctFilter) {
 }
 
 function JacksTab({ items }) {
-  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("P0");
+  const [answeredFilter, setAnsweredFilter] = useState("answered");
 
-  const filteredItems = priorityFilter === "all"
+  const priorityFiltered = priorityFilter === "all"
     ? items
     : items.filter((i) => i.priorities.includes(priorityFilter));
+
+  const filteredItems = answeredFilter === "answered"
+    ? priorityFiltered.filter((i) => i.answered)
+    : priorityFiltered;
 
   const cols = [
     { key: null,        label: "All contacts" },
@@ -350,29 +355,37 @@ function JacksTab({ items }) {
     whiteSpace: "nowrap",
   });
 
-  const rows = [
-    { label: "Received",               bold: true,  sub: false, val: (d) => d.received.toLocaleString() },
-    { label: "Answered",               bold: true,  sub: false, val: (d) => `${d.answered.toLocaleString()} (${d.pct(d.answered)}%)` },
-    { label: "↳ Within 30 biz mins",   bold: false, sub: true,  val: (d) => `${d.within30.toLocaleString()} (${d.pct(d.within30)}%)` },
-    { label: "↳ Outside 30 biz mins",  bold: false, sub: true,  val: (d) => `${d.outside30.toLocaleString()} (${d.pct(d.outside30)}%)` },
-    { label: "Not answered",           bold: true,  sub: false, val: (d) => `${d.notAnswered.toLocaleString()} (${d.pct(d.notAnswered)}%)` },
-    { label: "% Answered",             bold: true,  sub: false, val: (d) => `${d.pct(d.answered)}%` },
-    { label: "% Within 30 biz mins",   bold: true,  sub: false, val: (d) => `${d.pct(d.within30)}%` },
-    { label: "% Outside 30 biz mins",  bold: true,  sub: false, val: (d) => `${d.pct(d.outside30)}%` },
-    { label: "% Not answered",         bold: true,  sub: false, val: (d) => `${d.pct(d.notAnswered)}%` },
+  const allRows = [
+    { label: "Received",               bold: true,  sub: false, answeredOnly: false, val: (d) => d.received.toLocaleString() },
+    { label: "Answered",               bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.answered.toLocaleString()} (${d.pct(d.answered)}%)` },
+    { label: "↳ Within 30 biz mins",   bold: false, sub: true,  answeredOnly: false, val: (d) => `${d.within30.toLocaleString()} (${d.pct(d.within30)}%)` },
+    { label: "↳ Outside 30 biz mins",  bold: false, sub: true,  answeredOnly: false, val: (d) => `${d.outside30.toLocaleString()} (${d.pct(d.outside30)}%)` },
+    { label: "Not answered",           bold: true,  sub: false, answeredOnly: true,  val: (d) => `${d.notAnswered.toLocaleString()} (${d.pct(d.notAnswered)}%)` },
+    { label: "% Answered",             bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.pct(d.answered)}%` },
+    { label: "% Within 30 biz mins",   bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.pct(d.within30)}%` },
+    { label: "% Outside 30 biz mins",  bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.pct(d.outside30)}%` },
+    { label: "% Not answered",         bold: true,  sub: false, answeredOnly: true,  val: (d) => `${d.pct(d.notAnswered)}%` },
   ];
+  const rows = answeredFilter === "answered" ? allRows.filter((r) => !r.answeredOnly) : allRows;
 
   return (
     <div>
-      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
-        <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-          <option value="all">All priorities</option>
-          {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
-        </select>
-        {priorityFilter !== "all" && (
-          <span style={{ fontSize: 11, color: C.textDim }}>{filteredItems.length} of {items.length} messages</span>
-        )}
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
+          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="all">All priorities</option>
+            {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Responded status:</span>
+          <select value={answeredFilter} onChange={(e) => setAnsweredFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="answered">Answered only</option>
+            <option value="all">All messages</option>
+          </select>
+        </div>
+        <span style={{ fontSize: 11, color: C.textDim }}>{filteredItems.length} of {items.length} messages</span>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
@@ -654,7 +667,43 @@ function BreachTable({ responses, priority, excluded, onExclude, onRestore }) {
   );
 }
 
+const PASSWORD = "BritishGas2025";
+
+function LockScreen({ onUnlock }) {
+  const [input, setInput] = useState("");
+  const [error, setError] = useState(false);
+
+  const attempt = () => {
+    if (input === PASSWORD) { onUnlock(); }
+    else { setError(true); setInput(""); }
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "40px 48px", width: 340, textAlign: "center" }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, margin: "0 auto 20px" }}>⚡</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>Engage SLA Report</div>
+        <div style={{ fontSize: 12, color: C.textDim, marginBottom: 28 }}>Centrica / British Gas · Internal tool</div>
+        <input
+          type="password"
+          value={input}
+          onChange={(e) => { setInput(e.target.value); setError(false); }}
+          onKeyDown={(e) => e.key === "Enter" && attempt()}
+          placeholder="Enter password"
+          autoFocus
+          style={{ width: "100%", boxSizing: "border-box", background: C.bg, border: `1px solid ${error ? C.danger : C.border}`, borderRadius: 6, padding: "10px 14px", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 10 }}
+        />
+        {error && <div style={{ fontSize: 12, color: C.danger, marginBottom: 10 }}>Incorrect password</div>}
+        <button onClick={attempt} style={{ width: "100%", background: C.accent, border: "none", borderRadius: 6, padding: "10px 0", color: C.bg, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+          Unlock
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [unlocked, setUnlocked] = useState(false);
   const [csvFile, setCsvFile] = useState(null);
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -690,7 +739,7 @@ export default function App() {
   const report = status === "done" ? buildReport(responses) : null;
 
   const tabs = [
-    { id: "jacks", label: "Jack's tab" },
+    { id: "jacks", label: "All 1st Messages" },
     { id: "sla", label: "SLA Report" },
     ...PRIORITIES.map((p) => ({
       id: p,
@@ -699,6 +748,8 @@ export default function App() {
     })),
     { id: "overtime", label: "Over Time" },
   ];
+
+  if (!unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
@@ -808,7 +859,7 @@ export default function App() {
         {status === "done" && tab === "jacks" && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Jack's Tab — All First Messages</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>All 1st Messages</div>
               <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>All first customer messages from the report month · irrespective of priority · business hours only</div>
             </div>
             <JacksTab items={jacksData} />
