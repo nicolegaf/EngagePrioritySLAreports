@@ -216,6 +216,7 @@ function calcMetrics(rows) {
         if (!isCustomerMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
+        // Only count customer messages from the report month
         if (reportMonth && !inReportMonth(t, reportMonth)) return false;
         const hasRecentAgentReply = sorted.some(
           (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
@@ -234,6 +235,7 @@ function calcMetrics(rows) {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (t < customerTime) return false;
+        // Allow agent replies from the report month or the following month
         if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
         return true;
       });
@@ -771,7 +773,7 @@ function LockScreen({ onUnlock }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+    <div style={{ minHeight: "100vh", width: "100%", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "40px 48px", width: 340, textAlign: "center" }}>
         <div style={{ width: 48, height: 48, borderRadius: 12, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, margin: "0 auto 20px" }}>⚡</div>
         <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>Engage SLA Report</div>
@@ -841,8 +843,8 @@ export default function App() {
   if (!unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
-      <div style={{ maxWidth: 980, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 40px" }}>
+      <div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
