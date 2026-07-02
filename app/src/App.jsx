@@ -6,7 +6,7 @@ const C = {
   textDim: "#8A9BAE", muted: "#4B6278", p0: "#FF3B5C", p1: "#FF6B35", p2: "#FFB547",
 };
 const PRIORITIES = ["P0", "P1", "P2"];
-const CUSTOMER_TYPES = ["PAYGE", "Services", "Credit"];
+const CUSTOMER_TYPES = ["Credit", "PAYGE", "Services"];
 const PRIORITY_META = {
   P0: { color: C.p0, label: "P0 – Critical" },
   P1: { color: C.p1, label: "P1 – High" },
@@ -37,13 +37,10 @@ function splitBySep(line, sep) {
 function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
-
   const headerLine = rawLines[0];
   const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
-
   const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
-
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
     const parts = line.split(sep);
@@ -60,7 +57,6 @@ function parseCSV(text) {
     const lower = line.trimStart().toLowerCase();
     return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
   };
-
   let reconstructed = [];
   let current = null;
   for (let i = 1; i < rawLines.length; i++) {
@@ -74,9 +70,7 @@ function parseCSV(text) {
     }
   }
   if (current !== null) reconstructed.push(current);
-
   const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
-
   return sourceLines.map((line) => {
     const cols = splitBySep(line, sep);
     const row = {};
@@ -121,9 +115,7 @@ function getUKInfo(utcDate) {
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: false,
   }).formatToParts(utcDate).forEach(({ type, value }) => { parts[type] = +value; });
-  const wd = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Europe/London", weekday: "short",
-  }).format(utcDate);
+  const wd = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/London", weekday: "short" }).format(utcDate);
   parts.dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 0;
   return parts;
 }
@@ -168,16 +160,12 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
   return totalMinutes;
 }
 
-function isIrrelevant(row) {
-  return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant");
-}
+function isIrrelevant(row) { return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant"); }
 function isAgentMsg(row) {
   const author = (row["Author name"] || "").trim().toLowerCase();
   return author.includes("british gas") || author.includes("automation");
 }
-function isCustomerMsg(row) {
-  return !isAgentMsg(row) && !isIrrelevant(row);
-}
+function isCustomerMsg(row) { return !isAgentMsg(row) && !isIrrelevant(row); }
 
 function getReportMonth(rows) {
   for (const row of rows) {
@@ -187,15 +175,11 @@ function getReportMonth(rows) {
   return null;
 }
 
-function inReportMonth(date, reportMonth) {
-  return date.getUTCFullYear() === reportMonth.year && date.getUTCMonth() === reportMonth.month;
-}
+function inReportMonth(date, rm) { return date.getUTCFullYear() === rm.year && date.getUTCMonth() === rm.month; }
 
 function inAllowedAgentMonth(date, reportMonth) {
-  const nextMonth = reportMonth.month === 11
-    ? { year: reportMonth.year + 1, month: 0 }
-    : { year: reportMonth.year, month: reportMonth.month + 1 };
-  return inReportMonth(date, reportMonth) || inReportMonth(date, nextMonth);
+  const next = reportMonth.month === 11 ? { year: reportMonth.year + 1, month: 0 } : { year: reportMonth.year, month: reportMonth.month + 1 };
+  return inReportMonth(date, reportMonth) || inReportMonth(date, next);
 }
 
 function calcMetrics(rows) {
@@ -208,28 +192,21 @@ function calcMetrics(rows) {
   const responses = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
-
     let searchFrom = new Date(0);
-
     while (true) {
       const customer = sorted.find((m) => {
         if (!isCustomerMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
         if (reportMonth && !inReportMonth(t, reportMonth)) return false;
-        const hasRecentAgentReply = sorted.some(
-          (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
-                 t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000
-        );
-        if (hasRecentAgentReply) return false;
+        const hasRecentAgent = sorted.some((a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t && t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000);
+        if (hasRecentAgent) return false;
         const { priorities, customerTypes } = detectLabels(m["Label"] || m["Labels"] || "");
         return priorities.length > 0 && customerTypes.length > 0;
       });
       if (!customer) break;
-
       const customerTime = parseDate(customer["Date created (UTC)"]);
       const { priorities, customerTypes } = detectLabels(customer["Label"] || customer["Labels"] || "");
-
       const agentReply = sorted.find((m) => {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
@@ -238,32 +215,16 @@ function calcMetrics(rows) {
         return true;
       });
       if (!agentReply) break;
-
       const agentTime = parseDate(agentReply["Date created (UTC)"]);
       const convId = customer["Conversation ID"];
-      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
-        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-
+      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"] || `https://app.falcon.io/#/engage/${convId}/${convId}`;
       const ct = customerTypes[0] ?? null;
       const minutes = bizHoursElapsed(customerTime, agentTime, ct);
-      if (minutes < 20160) {
-        responses.push({
-          id: `${url}-${customerTime.getTime()}`,
-          minutes, priorities, customerTypes,
-          date: customerTime,
-          content: customer["Content"] || "",
-          network: customer["Network"] || "",
-          url,
-        });
-      }
-
+      if (minutes < 20160) responses.push({ id: `${url}-${customerTime.getTime()}`, minutes, priorities, customerTypes, date: customerTime, content: customer["Content"] || "", network: customer["Network"] || "", url });
       searchFrom = agentTime;
     }
   }
-  const reportMonthLabel = reportMonth
-    ? new Date(Date.UTC(reportMonth.year, reportMonth.month, 1))
-        .toLocaleString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
-    : null;
+  const reportMonthLabel = reportMonth ? new Date(Date.UTC(reportMonth.year, reportMonth.month, 1)).toLocaleString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) : null;
   return { responses, totalConversations: Object.keys(convMap).length, totalMessages: rows.length, reportMonthLabel };
 }
 
@@ -283,20 +244,12 @@ function calcJacksData(rows, reportMonth) {
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
         if (reportMonth && !inReportMonth(t, reportMonth)) return false;
-        const hasRecentAgentReply = sorted.some(
-          (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
-                 t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000
-        );
-        return !hasRecentAgentReply;
+        const hasRecentAgent = sorted.some((a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t && t - parseDate(a["Date created (UTC)"]) < 24 * 60 * 60 * 1000);
+        return !hasRecentAgent;
       });
       if (!customer) break;
       const customerTime = parseDate(customer["Date created (UTC)"]);
       const { customerTypes, priorities } = detectLabels(customer["Label"] || customer["Labels"] || "");
-      const convId = customer["Conversation ID"];
-      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
-        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-      const content = customer["Content"] || "";
-      const network = customer["Network"] || "";
       const agentReply = sorted.find((m) => {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
@@ -304,6 +257,10 @@ function calcJacksData(rows, reportMonth) {
         if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
         return true;
       });
+      const convId = customer["Conversation ID"];
+      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"] || `https://app.falcon.io/#/engage/${convId}/${convId}`;
+      const content = customer["Content"] || "";
+      const network = customer["Network"] || "";
       if (agentReply) {
         const agentTime = parseDate(agentReply["Date created (UTC)"]);
         const ct = customerTypes[0] ?? null;
@@ -334,45 +291,33 @@ function jacksStats(items, ctFilter) {
 function JacksTab({ items }) {
   const [priorityFilter, setPriorityFilter] = useState("P0");
   const [answeredFilter, setAnsweredFilter] = useState("answered");
-
-  const priorityFiltered = priorityFilter === "all"
-    ? items
-    : items.filter((i) => i.priorities.includes(priorityFilter));
-
-  const filteredItems = answeredFilter === "answered"
-    ? priorityFiltered.filter((i) => i.answered)
-    : priorityFiltered;
-
+  const priorityFiltered = priorityFilter === "all" ? items : items.filter((i) => i.priorities.includes(priorityFilter));
+  const filteredItems = answeredFilter === "answered" ? priorityFiltered.filter((i) => i.answered) : priorityFiltered;
   const cols = [
-    { key: null,        label: "All contacts" },
-    { key: "Credit",    label: "Credit energy" },
-    { key: "PAYGE",     label: "PAYGE" },
-    { key: "Services",  label: "Services" },
+    { key: null, label: "All contacts" },
+    { key: "Credit", label: "Credit energy" },
+    { key: "PAYGE", label: "PAYGE" },
+    { key: "Services", label: "Services" },
   ];
   const data = cols.map(({ key, label }) => ({ label, ...jacksStats(filteredItems, key) }));
-
   const cell = (content, bold, sub, color) => ({
     padding: sub ? "8px 16px 8px 28px" : "12px 16px",
     borderBottom: `1px solid ${C.border}`,
-    fontSize: bold ? 13 : 12,
-    fontWeight: bold ? 700 : 400,
-    color: color || (sub ? C.textDim : C.text),
-    whiteSpace: "nowrap",
+    fontSize: bold ? 13 : 12, fontWeight: bold ? 700 : 400,
+    color: color || (sub ? C.textDim : C.text), whiteSpace: "nowrap",
   });
-
   const allRows = [
-    { label: "Received",               bold: true,  sub: false, answeredOnly: false, val: (d) => d.received.toLocaleString() },
-    { label: "Answered",               bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.answered.toLocaleString()} (${d.pct(d.answered)}%)` },
-    { label: "↳ Within 30 biz mins",   bold: false, sub: true,  answeredOnly: false, val: (d) => `${d.within30.toLocaleString()} (${d.pct(d.within30)}%)` },
-    { label: "↳ Outside 30 biz mins",  bold: false, sub: true,  answeredOnly: false, val: (d) => `${d.outside30.toLocaleString()} (${d.pct(d.outside30)}%)` },
-    { label: "Not answered",           bold: true,  sub: false, answeredOnly: true,  val: (d) => `${d.notAnswered.toLocaleString()} (${d.pct(d.notAnswered)}%)` },
-    { label: "% Answered",             bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.pct(d.answered)}%` },
-    { label: "% Within 30 biz mins",   bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.pct(d.within30)}%` },
-    { label: "% Outside 30 biz mins",  bold: true,  sub: false, answeredOnly: false, val: (d) => `${d.pct(d.outside30)}%` },
-    { label: "% Not answered",         bold: true,  sub: false, answeredOnly: true,  val: (d) => `${d.pct(d.notAnswered)}%` },
+    { label: "Received", bold: true, sub: false, answeredOnly: false, val: (d) => d.received.toLocaleString() },
+    { label: "Answered", bold: true, sub: false, answeredOnly: false, val: (d) => `${d.answered.toLocaleString()} (${d.pct(d.answered)}%)` },
+    { label: "↳ Within 30 biz mins", bold: false, sub: true, answeredOnly: false, val: (d) => `${d.within30.toLocaleString()} (${d.pct(d.within30)}%)` },
+    { label: "↳ Outside 30 biz mins", bold: false, sub: true, answeredOnly: false, val: (d) => `${d.outside30.toLocaleString()} (${d.pct(d.outside30)}%)` },
+    { label: "Not answered", bold: true, sub: false, answeredOnly: true, val: (d) => `${d.notAnswered.toLocaleString()} (${d.pct(d.notAnswered)}%)` },
+    { label: "% Answered", bold: true, sub: false, answeredOnly: false, val: (d) => `${d.pct(d.answered)}%` },
+    { label: "% Within 30 biz mins", bold: true, sub: false, answeredOnly: false, val: (d) => `${d.pct(d.within30)}%` },
+    { label: "% Outside 30 biz mins", bold: true, sub: false, answeredOnly: false, val: (d) => `${d.pct(d.outside30)}%` },
+    { label: "% Not answered", bold: true, sub: false, answeredOnly: true, val: (d) => `${d.pct(d.notAnswered)}%` },
   ];
   const rows = answeredFilter === "answered" ? allRows.filter((r) => !r.answeredOnly) : allRows;
-
   return (
     <div>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -397,18 +342,14 @@ function JacksTab({ items }) {
           <thead>
             <tr style={{ background: C.bg }}>
               <th style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", minWidth: 200 }}></th>
-              {data.map((d) => (
-                <th key={d.label} style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: C.accent, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{d.label}</th>
-              ))}
+              {data.map((d) => <th key={d.label} style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, color: C.accent, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{d.label}</th>)}
             </tr>
           </thead>
           <tbody>
             {rows.map(({ label, bold, sub, val }) => (
               <tr key={label} style={{ background: sub ? C.bg + "88" : "transparent" }}>
                 <td style={cell(null, bold, sub)}>{label}</td>
-                {data.map((d) => (
-                  <td key={d.label} style={cell(val(d), bold, sub)}>{val(d)}</td>
-                ))}
+                {data.map((d) => <td key={d.label} style={cell(val(d), bold, sub)}>{val(d)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -418,19 +359,68 @@ function JacksTab({ items }) {
   );
 }
 
+function OverTimeTab({ items }) {
+  const dayMap = {};
+  for (const item of items) {
+    if (!item.date) continue;
+    const day = item.date.toISOString().slice(0, 10);
+    if (!dayMap[day]) dayMap[day] = [];
+    dayMap[day].push(item);
+  }
+  const days = Object.keys(dayMap).sort();
+  if (!days.length) return <div style={{ padding: "40px 24px", textAlign: "center", color: C.textDim, fontSize: 13 }}>No data to display.</div>;
+  const series = [
+    { key: null, label: "All", color: C.accent },
+    { key: "Credit", label: "Credit", color: CT_META.Credit.color },
+    { key: "PAYGE", label: "PAYGE", color: CT_META.PAYGE.color },
+    { key: "Services", label: "Services", color: CT_META.Services.color },
+  ];
+  const seriesData = series.map(({ key, label, color }) => ({
+    label, color,
+    values: days.map((day) => { const di = dayMap[day] || []; return key ? di.filter((i) => i.customerTypes.includes(key)).length : di.length; }),
+  }));
+  const W = 860, H = 300, pad = { top: 24, right: 24, bottom: 52, left: 44 };
+  const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
+  const maxVal = Math.max(...seriesData.flatMap((s) => s.values), 1);
+  const yMax = Math.ceil(maxVal / 5) * 5 || 5, yTicks = Math.min(yMax, 5);
+  const xPos = (i) => pad.left + (days.length > 1 ? (i / (days.length - 1)) * cW : cW / 2);
+  const yPos = (v) => pad.top + cH - (v / yMax) * cH;
+  const showEvery = Math.max(1, Math.ceil(days.length / 12));
+  return (
+    <div style={{ padding: "20px 24px" }}>
+      <div style={{ display: "flex", gap: 20, marginBottom: 20, flexWrap: "wrap" }}>
+        {series.map(({ label, color }) => (
+          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text }}>
+            <div style={{ width: 24, height: 3, background: color, borderRadius: 2 }} /><span>{label}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <svg width={W} height={H} style={{ display: "block" }}>
+          {Array.from({ length: yTicks + 1 }, (_, i) => { const v = Math.round((yMax / yTicks) * i); const y = yPos(v); return (<g key={i}><line x1={pad.left} x2={pad.left + cW} y1={y} y2={y} stroke={C.border} strokeWidth={1} /><text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize={10} fill={C.textDim}>{v}</text></g>); })}
+          {days.map((day, i) => { if (i % showEvery !== 0 && i !== days.length - 1) return null; return (<text key={day} x={xPos(i)} y={pad.top + cH + 18} textAnchor="middle" fontSize={10} fill={C.textDim}>{day.slice(5)}</text>); })}
+          <line x1={pad.left} x2={pad.left} y1={pad.top} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
+          <line x1={pad.left} x2={pad.left + cW} y1={pad.top + cH} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
+          {seriesData.map(({ label, color, values }) => {
+            const pts = values.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
+            return (<g key={label}><polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />{values.map((v, i) => <circle key={i} cx={xPos(i)} cy={yPos(v)} r={3} fill={color} />)}</g>);
+          })}
+        </svg>
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>First messages per day (UTC) · customer types may overlap</div>
+    </div>
+  );
+}
+
 function UnansweredTab({ items }) {
-  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("P0");
   const [ctFilter, setCtFilter] = useState("all");
-
   const unanswered = items.filter((i) => !i.answered);
-
   const visible = unanswered
     .filter((i) => priorityFilter === "all" || i.priorities.includes(priorityFilter))
     .filter((i) => ctFilter === "all" || i.customerTypes.includes(ctFilter))
     .sort((a, b) => b.date - a.date);
-
   const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-
   return (
     <div>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -468,14 +458,10 @@ function UnansweredTab({ items }) {
                   <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
                   <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network || "—"}</td>
                   <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                    {r.priorities.length > 0
-                      ? r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p]?.color ?? C.textDim} />)
-                      : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
+                    {r.priorities.length > 0 ? r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p]?.color ?? C.textDim} />) : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
                   </td>
                   <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                    {r.customerTypes.length > 0
-                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)
-                      : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
+                    {r.customerTypes.length > 0 ? r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />) : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
                   </td>
                   <td style={{ padding: "10px 14px", color: C.text, maxWidth: 380, verticalAlign: "top" }}>
                     <span title={r.content}>{r.content.length > 100 ? r.content.slice(0, 100) + "…" : r.content || "—"}</span>
@@ -489,94 +475,6 @@ function UnansweredTab({ items }) {
           </table>
         </div>
       )}
-    </div>
-  );
-}
-
-function OverTimeTab({ items }) {
-  const dayMap = {};
-  for (const item of items) {
-    if (!item.date) continue;
-    const day = item.date.toISOString().slice(0, 10);
-    if (!dayMap[day]) dayMap[day] = [];
-    dayMap[day].push(item);
-  }
-  const days = Object.keys(dayMap).sort();
-
-  if (!days.length) {
-    return <div style={{ padding: "40px 24px", textAlign: "center", color: C.textDim, fontSize: 13 }}>No data to display.</div>;
-  }
-
-  const series = [
-    { key: null,       label: "All",      color: C.accent },
-    { key: "Credit",   label: "Credit",   color: CT_META.Credit.color },
-    { key: "PAYGE",    label: "PAYGE",    color: CT_META.PAYGE.color },
-    { key: "Services", label: "Services", color: CT_META.Services.color },
-  ];
-
-  const seriesData = series.map(({ key, label, color }) => ({
-    label, color,
-    values: days.map((day) => {
-      const di = dayMap[day] || [];
-      return key ? di.filter((i) => i.customerTypes.includes(key)).length : di.length;
-    }),
-  }));
-
-  const W = 860, H = 300;
-  const pad = { top: 24, right: 24, bottom: 52, left: 44 };
-  const cW = W - pad.left - pad.right;
-  const cH = H - pad.top - pad.bottom;
-
-  const maxVal = Math.max(...seriesData.flatMap((s) => s.values), 1);
-  const yMax = Math.ceil(maxVal / 5) * 5 || 5;
-  const yTicks = Math.min(yMax, 5);
-
-  const xPos = (i) => pad.left + (days.length > 1 ? (i / (days.length - 1)) * cW : cW / 2);
-  const yPos = (v) => pad.top + cH - (v / yMax) * cH;
-  const showEvery = Math.max(1, Math.ceil(days.length / 12));
-
-  return (
-    <div style={{ padding: "20px 24px" }}>
-      <div style={{ display: "flex", gap: 20, marginBottom: 20, flexWrap: "wrap" }}>
-        {series.map(({ label, color }) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text }}>
-            <div style={{ width: 24, height: 3, background: color, borderRadius: 2 }} />
-            <span>{label}</span>
-          </div>
-        ))}
-      </div>
-      <div style={{ overflowX: "auto" }}>
-        <svg width={W} height={H} style={{ display: "block" }}>
-          {Array.from({ length: yTicks + 1 }, (_, i) => {
-            const v = Math.round((yMax / yTicks) * i);
-            const y = yPos(v);
-            return (
-              <g key={i}>
-                <line x1={pad.left} x2={pad.left + cW} y1={y} y2={y} stroke={C.border} strokeWidth={1} />
-                <text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize={10} fill={C.textDim}>{v}</text>
-              </g>
-            );
-          })}
-          {days.map((day, i) => {
-            if (i % showEvery !== 0 && i !== days.length - 1) return null;
-            return (
-              <text key={day} x={xPos(i)} y={pad.top + cH + 18} textAnchor="middle" fontSize={10} fill={C.textDim}>{day.slice(5)}</text>
-            );
-          })}
-          <line x1={pad.left} x2={pad.left} y1={pad.top} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
-          <line x1={pad.left} x2={pad.left + cW} y1={pad.top + cH} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
-          {seriesData.map(({ label, color, values }) => {
-            const pts = values.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
-            return (
-              <g key={label}>
-                <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
-                {values.map((v, i) => <circle key={i} cx={xPos(i)} cy={yPos(v)} r={3} fill={color} />)}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-      <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>First messages per day (UTC) · customer types may overlap</div>
     </div>
   );
 }
@@ -599,9 +497,7 @@ function buildReport(responses) {
   const table = {};
   for (const p of PRIORITIES) {
     table[p] = {};
-    for (const ct of CUSTOMER_TYPES) {
-      table[p][ct] = calcStats(responses.filter((r) => r.priorities.includes(p) && r.customerTypes.includes(ct)));
-    }
+    for (const ct of CUSTOMER_TYPES) table[p][ct] = calcStats(responses.filter((r) => r.priorities.includes(p) && r.customerTypes.includes(ct)));
     table[p]["Total"] = calcStats(responses.filter((r) => r.priorities.includes(p)));
   }
   return table;
@@ -631,32 +527,29 @@ function PctBar({ pct, color }) {
 }
 
 function SLACell({ data }) {
-  if (!data) return <td style={{ padding: "14px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
-  const color30 = data.pct30 >= 80 ? C.ok : data.pct30 >= 50 ? C.warn : C.danger;
-  const color60 = data.pct60 >= 80 ? C.ok : data.pct60 >= 50 ? C.warn : C.danger;
-  const color90 = data.pct90 >= 80 ? C.ok : data.pct90 >= 50 ? C.warn : C.danger;
+  if (!data) return <td style={{ padding: "12px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
+  const bands = [
+    { label: "Within 30 min", count: data.within30, pct: data.pct30 },
+    { label: "Within 60 min", count: data.within60, pct: data.pct60 },
+    { label: "Within 90 min", count: data.within90, pct: data.pct90 },
+  ];
   return (
-    <td style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
-      <div style={{ display: "flex", gap: 14 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 30 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within30}/{data.total}</div>
-          <PctBar pct={data.pct30} color={color30} />
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 60 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within60}/{data.total}</div>
-          <PctBar pct={data.pct60} color={color60} />
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 90 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color90, lineHeight: 1 }}>{data.pct90}%</div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within90}/{data.total}</div>
-          <PctBar pct={data.pct90} color={color90} />
-        </div>
+    <td style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {bands.map(({ label, count, pct }) => {
+          const color = pct >= 80 ? C.ok : pct >= 50 ? C.warn : C.danger;
+          return (
+            <div key={label}>
+              <div style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>{label}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+                <span style={{ fontSize: 20, fontWeight: 800, color, lineHeight: 1 }}>{count}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color }}>{pct}%</span>
+              </div>
+              <PctBar pct={pct} color={color} />
+            </div>
+          );
+        })}
       </div>
     </td>
   );
@@ -671,16 +564,11 @@ function LabelPill({ label, color }) {
 }
 
 function BreachTable({ responses, priority, excluded, onExclude, onRestore }) {
-  const breaches = responses
-    .filter((r) => r.priorities.includes(priority) && r.minutes > 30)
-    .sort((a, b) => b.minutes - a.minutes);
-
+  const breaches = responses.filter((r) => r.priorities.includes(priority) && r.minutes > 30).sort((a, b) => b.minutes - a.minutes);
   const [ctFilter, setCtFilter] = useState("all");
   const visible = ctFilter === "all" ? breaches : breaches.filter((r) => r.customerTypes.includes(ctFilter));
   const excludedInTab = breaches.filter((r) => excluded.has(r.id)).length;
-
   const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -692,8 +580,7 @@ function BreachTable({ responses, priority, excluded, onExclude, onRestore }) {
         ))}
         {excludedInTab > 0 && (
           <span style={{ marginLeft: 8, fontSize: 12, color: C.muted }}>
-            {excludedInTab} excluded ·{" "}
-            <button onClick={() => breaches.forEach((r) => onRestore(r.id))} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Reset</button>
+            {excludedInTab} excluded · <button onClick={() => breaches.forEach((r) => onRestore(r.id))} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Reset</button>
           </span>
         )}
       </div>
@@ -717,9 +604,7 @@ function BreachTable({ responses, priority, excluded, onExclude, onRestore }) {
                   <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}`, opacity: isExcluded ? 0.4 : 1 }}>
                     <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
                     <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network}</td>
-                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                      {r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)}
-                    </td>
+                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>{r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)}</td>
                     <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, color: badge.color }}>{fmtMins(r.minutes)}</td>
                     <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
                       <span style={{ background: badge.color + "22", color: badge.color, border: `1px solid ${badge.color}55`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>{badge.label}</span>
@@ -752,31 +637,17 @@ const PASSWORD = "BritishGas2025";
 function LockScreen({ onUnlock }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState(false);
-
-  const attempt = () => {
-    if (input === PASSWORD) { onUnlock(); }
-    else { setError(true); setInput(""); }
-  };
-
+  const attempt = () => { if (input === PASSWORD) { onUnlock(); } else { setError(true); setInput(""); } };
   return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "40px 48px", width: 340, textAlign: "center" }}>
         <div style={{ width: 48, height: 48, borderRadius: 12, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, margin: "0 auto 20px" }}>⚡</div>
         <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>Engage SLA Report</div>
         <div style={{ fontSize: 12, color: C.textDim, marginBottom: 28 }}>Centrica / British Gas · Internal tool</div>
-        <input
-          type="password"
-          value={input}
-          onChange={(e) => { setInput(e.target.value); setError(false); }}
-          onKeyDown={(e) => e.key === "Enter" && attempt()}
-          placeholder="Enter password"
-          autoFocus
-          style={{ width: "100%", boxSizing: "border-box", background: C.bg, border: `1px solid ${error ? C.danger : C.border}`, borderRadius: 6, padding: "10px 14px", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 10 }}
-        />
+        <input type="password" value={input} onChange={(e) => { setInput(e.target.value); setError(false); }} onKeyDown={(e) => e.key === "Enter" && attempt()} placeholder="Enter password" autoFocus
+          style={{ width: "100%", boxSizing: "border-box", background: C.bg, border: `1px solid ${error ? C.danger : C.border}`, borderRadius: 6, padding: "10px 14px", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 10 }} />
         {error && <div style={{ fontSize: 12, color: C.danger, marginBottom: 10 }}>Incorrect password</div>}
-        <button onClick={attempt} style={{ width: "100%", background: C.accent, border: "none", borderRadius: 6, padding: "10px 0", color: C.bg, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-          Unlock
-        </button>
+        <button onClick={attempt} style={{ width: "100%", background: C.accent, border: "none", borderRadius: 6, padding: "10px 0", color: C.bg, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Unlock</button>
       </div>
     </div>
   );
@@ -820,13 +691,13 @@ export default function App() {
 
   const tabs = [
     { id: "jacks", label: "All 1st Messages" },
-    { id: "sla", label: "SLA Report" },
+    { id: "unanswered", label: `Unanswered 1st Messages (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
+    { id: "sla", label: "Answered 1st messages - by SLA" },
     ...PRIORITIES.map((p) => ({
       id: p,
       label: `${p} Breaches (${responses.filter((r) => r.priorities.includes(p) && r.minutes > 30).length})`,
       color: PRIORITY_META[p].color,
     })),
-    { id: "unanswered", label: `Unanswered (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
     { id: "overtime", label: "Over Time" },
   ];
 
@@ -835,7 +706,6 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
-
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
           <div>
@@ -846,17 +716,13 @@ export default function App() {
 
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "20px 24px", marginBottom: 24 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Upload Engage Export</div>
-          <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>
-            Export your conversations from Brandwatch Engage and upload the file below. Auto-detects tab, semicolon, or comma-separated formats.
-          </div>
+          <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>Export your conversations from Brandwatch Engage and upload the file below. Auto-detects tab, semicolon, or comma-separated formats.</div>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.border, border: `1px dashed ${C.accent}55`, borderRadius: 6, padding: "10px 18px", cursor: "pointer", fontSize: 13 }}>
             <span>📂</span>
             <span style={{ color: C.accent }}>{csvFile || "Choose CSV / export file…"}</span>
             <input type="file" accept=".csv,.tsv,.txt" onChange={handleFile} style={{ display: "none" }} />
           </label>
-          {status === "error" && (
-            <div style={{ marginTop: 14, background: "#FF3B5C22", border: "1px solid #FF3B5C55", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#FF3B5C" }}>⚠ {errorMsg}</div>
-          )}
+          {status === "error" && <div style={{ marginTop: 14, background: "#FF3B5C22", border: "1px solid #FF3B5C55", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#FF3B5C" }}>⚠ {errorMsg}</div>}
         </div>
 
         {status === "done" && summary && (
@@ -888,8 +754,8 @@ export default function App() {
         {status === "done" && tab === "sla" && report && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30, 60 and 90 minutes · business hours only</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Answered 1st Messages — SLA Breakdown by Priority &amp; Customer Type</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>First responses within 30, 60 and 90 business minutes · priority + customer type labelled only</div>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
@@ -906,9 +772,7 @@ export default function App() {
                   {PRIORITIES.map((p) => (
                     <tr key={p}>
                       <td style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "middle", whiteSpace: "nowrap" }}>
-                        <span style={{ background: PRIORITY_META[p].color + "22", color: PRIORITY_META[p].color, border: `1px solid ${PRIORITY_META[p].color}55`, borderRadius: 4, padding: "4px 10px", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>
-                          {PRIORITY_META[p].label}
-                        </span>
+                        <span style={{ background: PRIORITY_META[p].color + "22", color: PRIORITY_META[p].color, border: `1px solid ${PRIORITY_META[p].color}55`, borderRadius: 4, padding: "4px 10px", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{PRIORITY_META[p].label}</span>
                       </td>
                       {CUSTOMER_TYPES.map((ct) => <SLACell key={ct} data={report[p][ct]} />)}
                       <SLACell data={report[p]["Total"]} />
@@ -932,7 +796,7 @@ export default function App() {
               <span style={{ background: PRIORITY_META[tab].color + "22", color: PRIORITY_META[tab].color, border: `1px solid ${PRIORITY_META[tab].color}55`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{tab}</span>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breaches — responses over 30 minutes</div>
             </div>
-            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Sorted by longest response time first. These conversations are included in the SLA report above.</div>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Sorted by longest response time first.</div>
             <BreachTable responses={allResponses} priority={tab} excluded={excluded} onExclude={handleExclude} onRestore={handleRestore} />
           </div>
         )}
@@ -950,7 +814,7 @@ export default function App() {
         {status === "done" && tab === "unanswered" && (
           <div style={{ background: C.surface, border: `1px solid ${C.danger}55`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Unanswered Messages</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Unanswered 1st Messages</div>
               <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>First customer messages from the report month with no agent reply · sorted newest first</div>
             </div>
             <UnansweredTab items={jacksData} />
@@ -966,7 +830,6 @@ export default function App() {
             <OverTimeTab items={jacksData} />
           </div>
         )}
-
       </div>
     </div>
   );
