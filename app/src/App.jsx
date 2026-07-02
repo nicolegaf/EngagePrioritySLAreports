@@ -6,7 +6,7 @@ const C = {
   textDim: "#8A9BAE", muted: "#4B6278", p0: "#FF3B5C", p1: "#FF6B35", p2: "#FFB547",
 };
 const PRIORITIES = ["P0", "P1", "P2"];
-const CUSTOMER_TYPES = ["PAYGE", "Services", "Credit"];
+const CUSTOMER_TYPES = ["Credit", "PAYGE", "Services"];
 const PRIORITY_META = {
   P0: { color: C.p0, label: "P0 – Critical" },
   P1: { color: C.p1, label: "P1 – High" },
@@ -292,11 +292,6 @@ function calcJacksData(rows, reportMonth) {
       if (!customer) break;
       const customerTime = parseDate(customer["Date created (UTC)"]);
       const { customerTypes, priorities } = detectLabels(customer["Label"] || customer["Labels"] || "");
-      const convId = customer["Conversation ID"];
-      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
-        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-      const content = customer["Content"] || "";
-      const network = customer["Network"] || "";
       const agentReply = sorted.find((m) => {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
@@ -304,6 +299,11 @@ function calcJacksData(rows, reportMonth) {
         if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
         return true;
       });
+      const convId = customer["Conversation ID"];
+      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
+        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
+      const content = customer["Content"] || "";
+      const network = customer["Network"] || "";
       if (agentReply) {
         const agentTime = parseDate(agentReply["Date created (UTC)"]);
         const ct = customerTypes[0] ?? null;
@@ -418,81 +418,6 @@ function JacksTab({ items }) {
   );
 }
 
-function UnansweredTab({ items }) {
-  const [priorityFilter, setPriorityFilter] = useState("all");
-  const [ctFilter, setCtFilter] = useState("all");
-
-  const unanswered = items.filter((i) => !i.answered);
-
-  const visible = unanswered
-    .filter((i) => priorityFilter === "all" || i.priorities.includes(priorityFilter))
-    .filter((i) => ctFilter === "all" || i.customerTypes.includes(ctFilter))
-    .sort((a, b) => b.date - a.date);
-
-  const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-
-  return (
-    <div>
-      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
-          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-            <option value="all">All priorities</option>
-            {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
-          </select>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Customer type:</span>
-          <select value={ctFilter} onChange={(e) => setCtFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-            <option value="all">All types</option>
-            {CUSTOMER_TYPES.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
-          </select>
-        </div>
-        <span style={{ fontSize: 11, color: C.textDim }}>{visible.length} of {unanswered.length} unanswered</span>
-      </div>
-      {visible.length === 0 ? (
-        <div style={{ padding: "40px 0", textAlign: "center", color: C.ok, fontSize: 14 }}>✓ No unanswered messages for this filter.</div>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: C.bg }}>
-                {["Date", "Network", "Priority", "Customer Type", "First Customer Message", "Link"].map((h) => (
-                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((r, idx) => (
-                <tr key={idx} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
-                  <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network || "—"}</td>
-                  <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                    {r.priorities.length > 0
-                      ? r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p]?.color ?? C.textDim} />)
-                      : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
-                  </td>
-                  <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                    {r.customerTypes.length > 0
-                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)
-                      : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
-                  </td>
-                  <td style={{ padding: "10px 14px", color: C.text, maxWidth: 380, verticalAlign: "top" }}>
-                    <span title={r.content}>{r.content.length > 100 ? r.content.slice(0, 100) + "…" : r.content || "—"}</span>
-                  </td>
-                  <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                    <a href={r.url} target="_blank" rel="noreferrer" style={{ color: C.accent, fontSize: 12, textDecoration: "none" }}>Open ↗</a>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function OverTimeTab({ items }) {
   const dayMap = {};
   for (const item of items) {
@@ -581,6 +506,81 @@ function OverTimeTab({ items }) {
   );
 }
 
+function UnansweredTab({ items }) {
+  const [priorityFilter, setPriorityFilter] = useState("P0");
+  const [ctFilter, setCtFilter] = useState("all");
+
+  const unanswered = items.filter((i) => !i.answered);
+
+  const visible = unanswered
+    .filter((i) => priorityFilter === "all" || i.priorities.includes(priorityFilter))
+    .filter((i) => ctFilter === "all" || i.customerTypes.includes(ctFilter))
+    .sort((a, b) => b.date - a.date);
+
+  const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
+          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="all">All priorities</option>
+            {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Customer type:</span>
+          <select value={ctFilter} onChange={(e) => setCtFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="all">All types</option>
+            {CUSTOMER_TYPES.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
+          </select>
+        </div>
+        <span style={{ fontSize: 11, color: C.textDim }}>{visible.length} of {unanswered.length} unanswered</span>
+      </div>
+      {visible.length === 0 ? (
+        <div style={{ padding: "40px 0", textAlign: "center", color: C.ok, fontSize: 14 }}>✓ No unanswered messages for this filter.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: C.bg }}>
+                {["Date", "Network", "Priority", "Customer Type", "First Customer Message", "Link"].map((h) => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((r, idx) => (
+                <tr key={idx} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
+                  <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network || "—"}</td>
+                  <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                    {r.priorities.length > 0
+                      ? r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p]?.color ?? C.textDim} />)
+                      : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
+                  </td>
+                  <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                    {r.customerTypes.length > 0
+                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)
+                      : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
+                  </td>
+                  <td style={{ padding: "10px 14px", color: C.text, maxWidth: 380, verticalAlign: "top" }}>
+                    <span title={r.content}>{r.content.length > 100 ? r.content.slice(0, 100) + "…" : r.content || "—"}</span>
+                  </td>
+                  <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                    <a href={r.url} target="_blank" rel="noreferrer" style={{ color: C.accent, fontSize: 12, textDecoration: "none" }}>Open ↗</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function calcStats(matching) {
   if (!matching.length) return null;
   const w30 = matching.filter((r) => r.minutes <= 30).length;
@@ -631,32 +631,29 @@ function PctBar({ pct, color }) {
 }
 
 function SLACell({ data }) {
-  if (!data) return <td style={{ padding: "14px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
-  const color30 = data.pct30 >= 80 ? C.ok : data.pct30 >= 50 ? C.warn : C.danger;
-  const color60 = data.pct60 >= 80 ? C.ok : data.pct60 >= 50 ? C.warn : C.danger;
-  const color90 = data.pct90 >= 80 ? C.ok : data.pct90 >= 50 ? C.warn : C.danger;
+  if (!data) return <td style={{ padding: "12px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
+  const bands = [
+    { label: "Within 30 min", count: data.within30, pct: data.pct30 },
+    { label: "Within 60 min", count: data.within60, pct: data.pct60 },
+    { label: "Within 90 min", count: data.within90, pct: data.pct90 },
+  ];
   return (
-    <td style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
-      <div style={{ display: "flex", gap: 14 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 30 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within30}/{data.total}</div>
-          <PctBar pct={data.pct30} color={color30} />
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 60 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within60}/{data.total}</div>
-          <PctBar pct={data.pct60} color={color60} />
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 90 min</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: color90, lineHeight: 1 }}>{data.pct90}%</div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within90}/{data.total}</div>
-          <PctBar pct={data.pct90} color={color90} />
-        </div>
+    <td style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {bands.map(({ label, count, pct }) => {
+          const color = pct >= 80 ? C.ok : pct >= 50 ? C.warn : C.danger;
+          return (
+            <div key={label}>
+              <div style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>{label}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+                <span style={{ fontSize: 20, fontWeight: 800, color, lineHeight: 1 }}>{count}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color }}>{pct}%</span>
+              </div>
+              <PctBar pct={pct} color={color} />
+            </div>
+          );
+        })}
       </div>
     </td>
   );
@@ -820,13 +817,13 @@ export default function App() {
 
   const tabs = [
     { id: "jacks", label: "All 1st Messages" },
-    { id: "sla", label: "SLA Report" },
+    { id: "unanswered", label: `Unanswered 1st Messages (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
+    { id: "sla", label: "Answered 1st messages - by SLA" },
     ...PRIORITIES.map((p) => ({
       id: p,
       label: `${p} Breaches (${responses.filter((r) => r.priorities.includes(p) && r.minutes > 30).length})`,
       color: PRIORITY_META[p].color,
     })),
-    { id: "unanswered", label: `Unanswered (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
     { id: "overtime", label: "Over Time" },
   ];
 
@@ -888,8 +885,8 @@ export default function App() {
         {status === "done" && tab === "sla" && report && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breakdown by Priority &amp; Customer Type</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>% of first responses within 30, 60 and 90 minutes · business hours only</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Answered 1st Messages — SLA Breakdown by Priority &amp; Customer Type</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>First responses within 30, 60 and 90 business minutes · priority + customer type labelled only</div>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
