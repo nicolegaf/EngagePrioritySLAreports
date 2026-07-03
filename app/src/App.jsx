@@ -19,7 +19,7 @@ const CT_META = {
 };
 
 const ENGAGE_NETWORKS = new Set([
-  "facebook", "twitter", "instagram", "youtube", "linkedin",
+  "facebook", "twitter", "twitterprofile", "instagram", "youtube", "linkedin",
   "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay",
 ]);
 
@@ -38,49 +38,77 @@ function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
 
-  const headerLine = rawLines[0];
+  // Step 1: Detect Type A (every field double-wrapped: ""value"") vs Type B (normal quoting)
+  const firstDataLine = rawLines.find((l, i) => i > 0 && l.trim()) || "";
+  const isTypeA = firstDataLine.startsWith('""');
+
+  // Step 1 (Type A only): Collapse double-quote wrapping into standard CSV quoting
+  const src = isTypeA ? text.replace(/""/g, '"') : text;
+  const lines = src.split(/\r?\n/);
+
+  // Step 2: Parse header; Engage exports use semicolons
+  const headerLine = lines[0];
   const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
 
-  const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
+  const dateIdx    = headers.findIndex((h) => /date created/i.test(h));
+  const contentIdx = headers.findIndex((h) => /^content$/i.test(h));
+  const DATE_RE    = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/;
+  const BURIED_RE  = /;(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
 
+  // Step 3: A real record starts with a known network name in the first field
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
-    const parts = line.split(sep);
-    if (networkColIdx > 0) {
-      const firstVal = (parts[0] || "").replace(/"/g, "").trim();
-      if (!/^\d+$/.test(firstVal)) return false;
-      const netVal = (parts[networkColIdx] || "").replace(/"/g, "").toLowerCase().trim();
-      return netVal.length > 0 && /^[a-z]+$/.test(netVal);
-    }
-    if (networkColIdx === 0) {
-      const netVal = (parts[0] || "").replace(/"/g, "").toLowerCase().trim();
-      return netVal.length > 0 && netVal.length <= 20 && /^[a-z]+$/.test(netVal);
-    }
-    const lower = line.trimStart().toLowerCase();
-    return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
+    const first = (line.split(sep)[0] || "").replace(/^"|"$/g, "").toLowerCase().trim();
+    return ENGAGE_NETWORKS.has(first);
   };
 
-  let reconstructed = [];
+  // Assemble multi-line records by gluing continuation lines onto their parent
+  const rawRecords = [];
   let current = null;
-  for (let i = 1; i < rawLines.length; i++) {
-    const line = rawLines[i];
-    if (!line.trim()) continue;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue; // Step 3: discard blank lines
     if (isRecordStart(line)) {
-      if (current !== null) reconstructed.push(current);
+      if (current !== null) rawRecords.push(current);
       current = line;
     } else if (current !== null) {
-      current += " " + line.trim();
+      // Step 3 (Type A only): strip trailing commas from continuation lines
+      const cont = isTypeA ? line.replace(/,+$/, "") : line;
+      current += " " + cont.trim();
     }
   }
-  if (current !== null) reconstructed.push(current);
+  if (current !== null) rawRecords.push(current);
 
-  const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
+  return rawRecords.map((record) => {
+    let cols = splitBySep(record, sep);
 
-  return sourceLines.map((line) => {
-    const cols = splitBySep(line, sep);
+    // Step 4: If date field is missing/malformed, rescue it from content where it got buried
+    if (dateIdx >= 0 && contentIdx >= 0 && contentIdx < cols.length) {
+      const dateVal = (cols[dateIdx] || "").replace(/"/g, "").trim();
+      if (!DATE_RE.test(dateVal)) {
+        const contentVal = cols[contentIdx] || "";
+        const m = contentVal.match(BURIED_RE);
+        if (m) {
+          const splitAt = contentVal.indexOf(";" + m[1]);
+          const realContent = contentVal.slice(0, splitAt);
+          const tail = contentVal.slice(splitAt + 1).split(sep);
+          cols = [...cols.slice(0, contentIdx), realContent, ...tail];
+        }
+      }
+      // Strip any stray quote chars left on the date value
+      if (cols[dateIdx]) cols[dateIdx] = cols[dateIdx].replace(/"/g, "").trim();
+    }
+
+    // Step 5: Remove embedded newline characters from every field
+    cols = cols.map((c) => (c || "").replace(/[\r\n]+/g, " ").trim());
+
+    // Step 6: Normalise to exactly 28 columns
+    while (cols.length < 28) cols.push("");
+    if (cols.length > 28) cols = cols.slice(0, 28);
+
     const row = {};
-    headers.forEach((h, i) => (row[h] = (cols[i] ?? "").trim()));
+    headers.forEach((h, i) => { row[h] = cols[i] ?? ""; });
     return row;
   });
 }
@@ -474,7 +502,7 @@ function OverTimeTab({ items, rawRows }) {
   }
 
   const activeSeries = VOLUME_SERIES.filter((s) => selected.includes(s.key));
-  const W = 1500, H = 320;
+  const W = 1200, H = 480;
   const pad = { top: 24, right: 32, bottom: 52, left: 52 };
   const cW = W - pad.left - pad.right;
   const cH = H - pad.top - pad.bottom;
@@ -513,7 +541,7 @@ function OverTimeTab({ items, rawRows }) {
       </div>
       <div style={{ padding: "20px 24px" }}>
         <div style={{ overflowX: "auto" }}>
-          <svg width={W} height={H} style={{ display: "block" }}>
+          <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
             {Array.from({ length: yTicks + 1 }, (_, i) => {
               const v = Math.round((yMax / yTicks) * i);
               const y = yPos(v);
@@ -604,7 +632,7 @@ function UnansweredTab({ items }) {
                   </td>
                   <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
                     {r.customerTypes.length > 0
-                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)
+                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={CT_META[ct]?.color ?? C.textDim} />)
                       : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
                   </td>
                   <td style={{ padding: "10px 14px", color: C.text, maxWidth: 380, verticalAlign: "top" }}>
