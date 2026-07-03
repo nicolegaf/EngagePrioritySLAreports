@@ -216,7 +216,6 @@ function calcMetrics(rows) {
         if (!isCustomerMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (isNaN(t) || t <= searchFrom) return false;
-        // Only count customer messages from the report month
         if (reportMonth && !inReportMonth(t, reportMonth)) return false;
         const hasRecentAgentReply = sorted.some(
           (a) => isAgentMsg(a) && parseDate(a["Date created (UTC)"]) < t &&
@@ -235,7 +234,6 @@ function calcMetrics(rows) {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
         if (t < customerTime) return false;
-        // Allow agent replies from the report month or the following month
         if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
         return true;
       });
@@ -420,90 +418,132 @@ function JacksTab({ items }) {
   );
 }
 
-function OverTimeTab({ items }) {
-  const dayMap = {};
-  for (const item of items) {
-    if (!item.date) continue;
+const VOLUME_SERIES = [
+  { key: "firstMsgs",         label: "All 1st messages",         color: C.accent },
+  { key: "firstMsgResponses", label: "All 1st msg responses",    color: C.ok },
+  { key: "totalCustomer",     label: "Total customer messages",  color: "#A78BFA" },
+  { key: "totalAgent",        label: "Total agent replies",      color: C.warn },
+];
+
+function OverTimeTab({ items, rawRows }) {
+  const [selected, setSelected] = useState(["firstMsgs", "firstMsgResponses"]);
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [ctFilter, setCtFilter] = useState("all");
+
+  const toggle = (key) => setSelected((prev) => prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
+
+  const filteredItems = items
+    .filter((i) => priorityFilter === "all" || i.priorities.includes(priorityFilter))
+    .filter((i) => ctFilter === "all" || i.customerTypes.includes(ctFilter));
+
+  const customerDayMap = {}, agentDayMap = {};
+  rawRows.forEach((row) => {
+    const t = parseDate(row["Date created (UTC)"]);
+    if (isNaN(t)) return;
+    if (priorityFilter !== "all") {
+      const { priorities } = detectLabels(row["Label"] || row["Labels"] || "");
+      if (!priorities.includes(priorityFilter)) return;
+    }
+    if (ctFilter !== "all") {
+      const { customerTypes } = detectLabels(row["Label"] || row["Labels"] || "");
+      if (!customerTypes.includes(ctFilter)) return;
+    }
+    const day = t.toISOString().slice(0, 10);
+    if (isCustomerMsg(row)) customerDayMap[day] = (customerDayMap[day] || 0) + 1;
+    else if (isAgentMsg(row)) agentDayMap[day] = (agentDayMap[day] || 0) + 1;
+  });
+
+  const firstMsgDayMap = {}, firstMsgResDayMap = {};
+  filteredItems.forEach((item) => {
+    if (!item.date) return;
     const day = item.date.toISOString().slice(0, 10);
-    if (!dayMap[day]) dayMap[day] = [];
-    dayMap[day].push(item);
-  }
-  const days = Object.keys(dayMap).sort();
+    firstMsgDayMap[day] = (firstMsgDayMap[day] || 0) + 1;
+    if (item.answered) firstMsgResDayMap[day] = (firstMsgResDayMap[day] || 0) + 1;
+  });
+
+  const dataByKey = { firstMsgs: firstMsgDayMap, firstMsgResponses: firstMsgResDayMap, totalCustomer: customerDayMap, totalAgent: agentDayMap };
+
+  const allDays = new Set([
+    ...Object.keys(customerDayMap), ...Object.keys(agentDayMap),
+    ...Object.keys(firstMsgDayMap), ...Object.keys(firstMsgResDayMap),
+  ]);
+  const days = [...allDays].sort();
 
   if (!days.length) {
     return <div style={{ padding: "40px 24px", textAlign: "center", color: C.textDim, fontSize: 13 }}>No data to display.</div>;
   }
 
-  const series = [
-    { key: null,       label: "All",      color: C.accent },
-    { key: "Credit",   label: "Credit",   color: CT_META.Credit.color },
-    { key: "PAYGE",    label: "PAYGE",    color: CT_META.PAYGE.color },
-    { key: "Services", label: "Services", color: CT_META.Services.color },
-  ];
-
-  const seriesData = series.map(({ key, label, color }) => ({
-    label, color,
-    values: days.map((day) => {
-      const di = dayMap[day] || [];
-      return key ? di.filter((i) => i.customerTypes.includes(key)).length : di.length;
-    }),
-  }));
-
-  const W = 860, H = 300;
-  const pad = { top: 24, right: 24, bottom: 52, left: 44 };
+  const activeSeries = VOLUME_SERIES.filter((s) => selected.includes(s.key));
+  const W = 1200, H = 320;
+  const pad = { top: 24, right: 32, bottom: 52, left: 52 };
   const cW = W - pad.left - pad.right;
   const cH = H - pad.top - pad.bottom;
-
-  const maxVal = Math.max(...seriesData.flatMap((s) => s.values), 1);
+  const maxVal = Math.max(...activeSeries.flatMap((s) => days.map((d) => dataByKey[s.key][d] || 0)), 1);
   const yMax = Math.ceil(maxVal / 5) * 5 || 5;
-  const yTicks = Math.min(yMax, 5);
-
+  const yTicks = Math.min(yMax, 6);
   const xPos = (i) => pad.left + (days.length > 1 ? (i / (days.length - 1)) * cW : cW / 2);
   const yPos = (v) => pad.top + cH - (v / yMax) * cH;
-  const showEvery = Math.max(1, Math.ceil(days.length / 12));
+  const showEvery = Math.max(1, Math.ceil(days.length / 16));
 
   return (
-    <div style={{ padding: "20px 24px" }}>
-      <div style={{ display: "flex", gap: 20, marginBottom: 20, flexWrap: "wrap" }}>
-        {series.map(({ label, color }) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text }}>
-            <div style={{ width: 24, height: 3, background: color, borderRadius: 2 }} />
-            <span>{label}</span>
-          </div>
-        ))}
+    <div>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
+          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="all">All priorities</option>
+            {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Customer type:</span>
+          <select value={ctFilter} onChange={(e) => setCtFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="all">All types</option>
+            {CUSTOMER_TYPES.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Show:</span>
+          {VOLUME_SERIES.map((s) => (
+            <button key={s.key} onClick={() => toggle(s.key)} style={{ padding: "4px 12px", borderRadius: 5, fontSize: 12, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${selected.includes(s.key) ? s.color : C.border}`, background: selected.includes(s.key) ? s.color + "22" : "transparent", color: selected.includes(s.key) ? s.color : C.textDim }}>
+              {s.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <svg width={W} height={H} style={{ display: "block" }}>
-          {Array.from({ length: yTicks + 1 }, (_, i) => {
-            const v = Math.round((yMax / yTicks) * i);
-            const y = yPos(v);
-            return (
-              <g key={i}>
-                <line x1={pad.left} x2={pad.left + cW} y1={y} y2={y} stroke={C.border} strokeWidth={1} />
-                <text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize={10} fill={C.textDim}>{v}</text>
-              </g>
-            );
-          })}
-          {days.map((day, i) => {
-            if (i % showEvery !== 0 && i !== days.length - 1) return null;
-            return (
-              <text key={day} x={xPos(i)} y={pad.top + cH + 18} textAnchor="middle" fontSize={10} fill={C.textDim}>{day.slice(5)}</text>
-            );
-          })}
-          <line x1={pad.left} x2={pad.left} y1={pad.top} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
-          <line x1={pad.left} x2={pad.left + cW} y1={pad.top + cH} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
-          {seriesData.map(({ label, color, values }) => {
-            const pts = values.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
-            return (
-              <g key={label}>
-                <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
-                {values.map((v, i) => <circle key={i} cx={xPos(i)} cy={yPos(v)} r={3} fill={color} />)}
-              </g>
-            );
-          })}
-        </svg>
+      <div style={{ padding: "20px 24px" }}>
+        <div style={{ overflowX: "auto" }}>
+          <svg width={W} height={H} style={{ display: "block" }}>
+            {Array.from({ length: yTicks + 1 }, (_, i) => {
+              const v = Math.round((yMax / yTicks) * i);
+              const y = yPos(v);
+              return (
+                <g key={i}>
+                  <line x1={pad.left} x2={pad.left + cW} y1={y} y2={y} stroke={C.border} strokeWidth={1} />
+                  <text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize={10} fill={C.textDim}>{v}</text>
+                </g>
+              );
+            })}
+            {days.map((day, i) => {
+              if (i % showEvery !== 0 && i !== days.length - 1) return null;
+              return <text key={day} x={xPos(i)} y={pad.top + cH + 18} textAnchor="middle" fontSize={10} fill={C.textDim}>{day.slice(5)}</text>;
+            })}
+            <line x1={pad.left} x2={pad.left} y1={pad.top} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
+            <line x1={pad.left} x2={pad.left + cW} y1={pad.top + cH} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
+            {activeSeries.map(({ key, color }) => {
+              const values = days.map((d) => dataByKey[key][d] || 0);
+              const pts = values.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
+              return (
+                <g key={key}>
+                  <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
+                  {values.map((v, i) => <circle key={i} cx={xPos(i)} cy={yPos(v)} r={3} fill={color} />)}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Volume per day (UTC) · priority &amp; customer type filters apply to labelled messages</div>
       </div>
-      <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>First messages per day (UTC) · customer types may overlap</div>
     </div>
   );
 }
@@ -805,11 +845,12 @@ export default function App() {
   const [excluded, setExcluded] = useState(new Set());
   const [summary, setSummary] = useState(null);
   const [jacksData, setJacksData] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
   const [tab, setTab] = useState("jacks");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set()); setJacksData([]);
+    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set()); setJacksData([]); setRawRows([]);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
@@ -819,6 +860,7 @@ export default function App() {
         const reportMonth = getReportMonth(rows);
         setAllResponses(resp);
         setJacksData(calcJacksData(rows, reportMonth));
+        setRawRows(rows);
         setSummary({ totalMessages, totalConversations, responses: resp.length, reportMonthLabel });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
@@ -837,7 +879,7 @@ export default function App() {
     { id: "unanswered", label: `Unanswered 1st Messages (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
     { id: "sla", label: "Answered 1st messages - by SLA" },
     { id: "breaches", label: `SLA Breaches (${responses.filter((r) => r.minutes > 30).length})`, color: C.danger },
-    { id: "overtime", label: "Over Time" },
+    { id: "overtime", label: "Volume Over Time" },
   ];
 
   if (!unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
@@ -969,10 +1011,10 @@ export default function App() {
         {status === "done" && tab === "overtime" && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>First Messages Over Time</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>Total qualifying first messages per day, broken down by customer type</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Volume Over Time</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>Daily message volumes · toggle series and filter by priority or customer type</div>
             </div>
-            <OverTimeTab items={jacksData} />
+            <OverTimeTab items={jacksData} rawRows={rawRows} />
           </div>
         )}
 
