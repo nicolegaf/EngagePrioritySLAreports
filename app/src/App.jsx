@@ -38,15 +38,12 @@ function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
 
-  // Step 1: Detect Type A (every field double-wrapped: ""value"") vs Type B (normal quoting)
   const firstDataLine = rawLines.find((l, i) => i > 0 && l.trim()) || "";
   const isTypeA = firstDataLine.startsWith('""');
 
-  // Step 1 (Type A only): Collapse double-quote wrapping into standard CSV quoting
   const src = isTypeA ? text.replace(/""/g, '"') : text;
   const lines = src.split(/\r?\n/);
 
-  // Step 2: Detect delimiter by whichever produces the most columns from the header
   const headerLine = lines[0];
   const detectSep = (line) => {
     let best = ",", bestN = 0;
@@ -64,14 +61,12 @@ function parseCSV(text) {
   const DATE_RE    = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/;
   const BURIED_RE  = /;(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
 
-  // Step 3: A real record starts with a known network name in the first field
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
     const first = (line.split(sep)[0] || "").replace(/^"|"$/g, "").toLowerCase().trim();
     return ENGAGE_NETWORKS.has(first);
   };
 
-  // Assemble multi-line records by gluing continuation lines onto their parent
   const rawRecords = [];
   let current = null;
   for (let i = 1; i < lines.length; i++) {
@@ -90,7 +85,6 @@ function parseCSV(text) {
   return rawRecords.map((record) => {
     let cols = splitBySep(record, sep);
 
-    // Step 4: If date field is missing/malformed, rescue it from content where it got buried
     if (dateIdx >= 0 && contentIdx >= 0 && contentIdx < cols.length) {
       const dateVal = (cols[dateIdx] || "").replace(/"/g, "").trim();
       if (!DATE_RE.test(dateVal)) {
@@ -106,10 +100,8 @@ function parseCSV(text) {
       if (cols[dateIdx]) cols[dateIdx] = cols[dateIdx].replace(/"/g, "").trim();
     }
 
-    // Step 5: Remove embedded newline characters from every field
     cols = cols.map((c) => (c || "").replace(/[\r\n]+/g, " ").trim());
 
-    // Step 6: Normalise to exactly 28 columns
     while (cols.length < 28) cols.push("");
     if (cols.length > 28) cols = cols.slice(0, 28);
 
@@ -122,7 +114,10 @@ function parseCSV(text) {
 function parseDate(str) {
   if (!str || !str.trim()) return new Date(NaN);
   const s = str.trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s);
+  // ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) — always treat as UTC
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (iso) return new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3], +iso[4], +iso[5], +(iso[6] || 0)));
+  // DD/MM/YYYY HH:MM format
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]));
   return new Date(s);
@@ -212,11 +207,18 @@ function isCustomerMsg(row) {
 }
 
 function getReportMonth(rows) {
+  const counts = {};
   for (const row of rows) {
     const t = parseDate(row["Date created (UTC)"]);
-    if (!isNaN(t)) return { year: t.getUTCFullYear(), month: t.getUTCMonth() };
+    if (isNaN(t)) continue;
+    const key = `${t.getUTCFullYear()}-${t.getUTCMonth()}`;
+    counts[key] = (counts[key] || 0) + 1;
   }
-  return null;
+  const keys = Object.keys(counts);
+  if (!keys.length) return null;
+  const best = keys.reduce((a, b) => counts[a] >= counts[b] ? a : b);
+  const [year, month] = best.split("-").map(Number);
+  return { year, month };
 }
 
 function inReportMonth(date, reportMonth) {
