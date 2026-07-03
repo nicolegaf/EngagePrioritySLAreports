@@ -474,7 +474,7 @@ function OverTimeTab({ items, rawRows }) {
   }
 
   const activeSeries = VOLUME_SERIES.filter((s) => selected.includes(s.key));
-  const W = 1200, H = 480;
+  const W = 1350, H = 320;
   const pad = { top: 24, right: 32, bottom: 52, left: 52 };
   const cW = W - pad.left - pad.right;
   const cH = H - pad.top - pad.bottom;
