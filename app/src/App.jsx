@@ -46,9 +46,17 @@ function parseCSV(text) {
   const src = isTypeA ? text.replace(/""/g, '"') : text;
   const lines = src.split(/\r?\n/);
 
-  // Step 2: Parse header; Engage exports use semicolons
+  // Step 2: Detect delimiter by whichever produces the most columns from the header
   const headerLine = lines[0];
-  const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
+  const detectSep = (line) => {
+    let best = ",", bestN = 0;
+    for (const s of [";", "\t", ","]) {
+      const n = splitBySep(line, s).length;
+      if (n > bestN) { bestN = n; best = s; }
+    }
+    return best;
+  };
+  const sep = detectSep(headerLine);
   const headers = splitBySep(headerLine, sep);
 
   const dateIdx    = headers.findIndex((h) => /date created/i.test(h));
@@ -68,12 +76,11 @@ function parseCSV(text) {
   let current = null;
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
-    if (!line.trim()) continue; // Step 3: discard blank lines
+    if (!line.trim()) continue;
     if (isRecordStart(line)) {
       if (current !== null) rawRecords.push(current);
       current = line;
     } else if (current !== null) {
-      // Step 3 (Type A only): strip trailing commas from continuation lines
       const cont = isTypeA ? line.replace(/,+$/, "") : line;
       current += " " + cont.trim();
     }
@@ -96,7 +103,6 @@ function parseCSV(text) {
           cols = [...cols.slice(0, contentIdx), realContent, ...tail];
         }
       }
-      // Strip any stray quote chars left on the date value
       if (cols[dateIdx]) cols[dateIdx] = cols[dateIdx].replace(/"/g, "").trim();
     }
 
@@ -123,16 +129,14 @@ function parseDate(str) {
 }
 
 function detectLabels(labelStr) {
-  const parts = (labelStr || "").toUpperCase().split(",").map((l) => l.trim());
+  const s = (labelStr || "").toUpperCase();
   const priorities = new Set(); const customerTypes = new Set();
-  for (const part of parts) {
-    if (part.includes("_P0") || part === "P0") priorities.add("P0");
-    if (part.includes("_P1") || part === "P1") priorities.add("P1");
-    if (part.includes("_P2") || part === "P2") priorities.add("P2");
-    if (part.includes("PAYGE"))    customerTypes.add("PAYGE");
-    if (part.includes("SERVICES")) customerTypes.add("Services");
-    if (part.includes("CREDIT"))   customerTypes.add("Credit");
-  }
+  if (s.includes("_P0") || /(?:^|[^A-Z])P0(?:[^A-Z]|$)/.test(s)) priorities.add("P0");
+  if (s.includes("_P1") || /(?:^|[^A-Z])P1(?:[^A-Z]|$)/.test(s)) priorities.add("P1");
+  if (s.includes("_P2") || /(?:^|[^A-Z])P2(?:[^A-Z]|$)/.test(s)) priorities.add("P2");
+  if (s.includes("PAYGE"))    customerTypes.add("PAYGE");
+  if (s.includes("SERVICES")) customerTypes.add("Services");
+  if (s.includes("CREDIT"))   customerTypes.add("Credit");
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
@@ -632,7 +636,7 @@ function UnansweredTab({ items }) {
                   </td>
                   <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
                     {r.customerTypes.length > 0
-                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={CT_META[ct]?.color ?? C.textDim} />)
+                      ? r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)
                       : <span style={{ color: C.muted, fontSize: 11 }}>None</span>}
                   </td>
                   <td style={{ padding: "10px 14px", color: C.text, maxWidth: 380, verticalAlign: "top" }}>
