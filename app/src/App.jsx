@@ -114,10 +114,8 @@ function parseCSV(text) {
 function parseDate(str) {
   if (!str || !str.trim()) return new Date(NaN);
   const s = str.trim();
-  // ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) — always treat as UTC
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
   if (iso) return new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3], +iso[4], +iso[5], +(iso[6] || 0)));
-  // DD/MM/YYYY HH:MM format
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]));
   return new Date(s);
@@ -198,6 +196,10 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
 function isIrrelevant(row) {
   return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant");
 }
+function isExcludedFromUnanswered(labelStr) {
+  const s = (labelStr || "").toLowerCase();
+  return s.includes("cc_resolved") || s.includes("cc_duplicate message") || s.includes("cc_on hold");
+}
 function isAgentMsg(row) {
   const author = (row["Author name"] || "").trim().toLowerCase();
   return author.includes("british gas") || author.includes("automation");
@@ -242,9 +244,7 @@ function calcMetrics(rows) {
   const responses = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
-
     let searchFrom = new Date(0);
-
     while (true) {
       const customer = sorted.find((m) => {
         if (!isCustomerMsg(m)) return false;
@@ -290,7 +290,6 @@ function calcMetrics(rows) {
           url,
         });
       }
-
       searchFrom = agentTime;
     }
   }
@@ -345,7 +344,10 @@ function calcJacksData(rows, reportMonth) {
         items.push({ answered: true, minutes, customerTypes, priorities, date: customerTime, content, network, url });
         searchFrom = agentTime;
       } else {
-        items.push({ answered: false, minutes: null, customerTypes, priorities, date: customerTime, content, network, url });
+        const labelStr = customer["Label"] || customer["Labels"] || "";
+        if (!isExcludedFromUnanswered(labelStr)) {
+          items.push({ answered: false, minutes: null, customerTypes, priorities, date: customerTime, content, network, url });
+        }
         break;
       }
     }
@@ -921,7 +923,6 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 40px" }}>
       <div>
-
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
           <div>
@@ -1051,7 +1052,6 @@ export default function App() {
             <OverTimeTab items={jacksData} rawRows={rawRows} />
           </div>
         )}
-
       </div>
     </div>
   );
