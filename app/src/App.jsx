@@ -6,7 +6,7 @@ const C = {
   textDim: "#8A9BAE", muted: "#4B6278", p0: "#FF3B5C", p1: "#FF6B35", p2: "#FFB547",
 };
 const PRIORITIES = ["P0", "P1", "P2"];
-const CUSTOMER_TYPES = ["Credit", "PAYGE", "Services"];
+const CUSTOMER_TYPES = ["PAYGE", "Services", "Credit"];
 const PRIORITY_META = {
   P0: { color: C.p0, label: "P0 – Critical" },
   P1: { color: C.p1, label: "P1 – High" },
@@ -19,7 +19,7 @@ const CT_META = {
 };
 
 const ENGAGE_NETWORKS = new Set([
-  "facebook", "twitter", "twitterprofile", "instagram", "youtube", "linkedin",
+  "facebook", "twitter", "instagram", "youtube", "linkedin",
   "tiktok", "whatsapp", "telegram", "google", "trustpilot", "appstore", "googleplay",
 ]);
 
@@ -38,75 +38,49 @@ function parseCSV(text) {
   const rawLines = text.split(/\r?\n/);
   if (rawLines.length < 2) return [];
 
-  const firstDataLine = rawLines.find((l, i) => i > 0 && l.trim()) || "";
-  const isTypeA = firstDataLine.startsWith('""');
-
-  const src = isTypeA ? text.replace(/""/g, '"') : text;
-  const lines = src.split(/\r?\n/);
-
-  const headerLine = lines[0];
-  const detectSep = (line) => {
-    let best = ",", bestN = 0;
-    for (const s of [";", "\t", ","]) {
-      const n = splitBySep(line, s).length;
-      if (n > bestN) { bestN = n; best = s; }
-    }
-    return best;
-  };
-  const sep = detectSep(headerLine);
+  const headerLine = rawLines[0];
+  const sep = headerLine.includes(";") ? ";" : headerLine.includes("\t") ? "\t" : ",";
   const headers = splitBySep(headerLine, sep);
 
-  const dateIdx    = headers.findIndex((h) => /date created/i.test(h));
-  const contentIdx = headers.findIndex((h) => /^content$/i.test(h));
-  const DATE_RE    = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/;
-  const BURIED_RE  = /;(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
+  const networkColIdx = headers.findIndex((h) => h.toLowerCase() === "network");
 
   const isRecordStart = (line) => {
     if (!line.trim()) return false;
-    const first = (line.split(sep)[0] || "").replace(/^"|"$/g, "").toLowerCase().trim();
-    return ENGAGE_NETWORKS.has(first);
+    const parts = line.split(sep);
+    if (networkColIdx > 0) {
+      const firstVal = (parts[0] || "").replace(/"/g, "").trim();
+      if (!/^\d+$/.test(firstVal)) return false;
+      const netVal = (parts[networkColIdx] || "").replace(/"/g, "").toLowerCase().trim();
+      return netVal.length > 0 && /^[a-z]+$/.test(netVal);
+    }
+    if (networkColIdx === 0) {
+      const netVal = (parts[0] || "").replace(/"/g, "").toLowerCase().trim();
+      return netVal.length > 0 && netVal.length <= 20 && /^[a-z]+$/.test(netVal);
+    }
+    const lower = line.trimStart().toLowerCase();
+    return [...ENGAGE_NETWORKS].some((n) => lower.startsWith(n + sep));
   };
 
-  const rawRecords = [];
+  let reconstructed = [];
   let current = null;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
+  for (let i = 1; i < rawLines.length; i++) {
+    const line = rawLines[i];
     if (!line.trim()) continue;
     if (isRecordStart(line)) {
-      if (current !== null) rawRecords.push(current);
+      if (current !== null) reconstructed.push(current);
       current = line;
     } else if (current !== null) {
-      const cont = isTypeA ? line.replace(/,+$/, "") : line;
-      current += " " + cont.trim();
+      current += " " + line.trim();
     }
   }
-  if (current !== null) rawRecords.push(current);
+  if (current !== null) reconstructed.push(current);
 
-  return rawRecords.map((record) => {
-    let cols = splitBySep(record, sep);
+  const sourceLines = reconstructed.length ? reconstructed : rawLines.slice(1).filter((l) => l.trim());
 
-    if (dateIdx >= 0 && contentIdx >= 0 && contentIdx < cols.length) {
-      const dateVal = (cols[dateIdx] || "").replace(/"/g, "").trim();
-      if (!DATE_RE.test(dateVal)) {
-        const contentVal = cols[contentIdx] || "";
-        const m = contentVal.match(BURIED_RE);
-        if (m) {
-          const splitAt = contentVal.indexOf(";" + m[1]);
-          const realContent = contentVal.slice(0, splitAt);
-          const tail = contentVal.slice(splitAt + 1).split(sep);
-          cols = [...cols.slice(0, contentIdx), realContent, ...tail];
-        }
-      }
-      if (cols[dateIdx]) cols[dateIdx] = cols[dateIdx].replace(/"/g, "").trim();
-    }
-
-    cols = cols.map((c) => (c || "").replace(/[\r\n]+/g, " ").trim());
-
-    while (cols.length < 28) cols.push("");
-    if (cols.length > 28) cols = cols.slice(0, 28);
-
+  return sourceLines.map((line) => {
+    const cols = splitBySep(line, sep);
     const row = {};
-    headers.forEach((h, i) => { row[h] = cols[i] ?? ""; });
+    headers.forEach((h, i) => (row[h] = (cols[i] ?? "").trim()));
     return row;
   });
 }
@@ -114,22 +88,23 @@ function parseCSV(text) {
 function parseDate(str) {
   if (!str || !str.trim()) return new Date(NaN);
   const s = str.trim();
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (iso) return new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3], +iso[4], +iso[5], +(iso[6] || 0)));
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s);
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
   if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]));
   return new Date(s);
 }
 
 function detectLabels(labelStr) {
-  const s = (labelStr || "").toUpperCase();
+  const parts = (labelStr || "").toUpperCase().split(",").map((l) => l.trim());
   const priorities = new Set(); const customerTypes = new Set();
-  if (s.includes("_P0") || /(?:^|[^A-Z])P0(?:[^A-Z]|$)/.test(s)) priorities.add("P0");
-  if (s.includes("_P1") || /(?:^|[^A-Z])P1(?:[^A-Z]|$)/.test(s)) priorities.add("P1");
-  if (s.includes("_P2") || /(?:^|[^A-Z])P2(?:[^A-Z]|$)/.test(s)) priorities.add("P2");
-  if (s.includes("PAYGE"))    customerTypes.add("PAYGE");
-  if (s.includes("SERVICES")) customerTypes.add("Services");
-  if (s.includes("CREDIT"))   customerTypes.add("Credit");
+  for (const part of parts) {
+    if (part.includes("_P0") || part === "P0") priorities.add("P0");
+    if (part.includes("_P1") || part === "P1") priorities.add("P1");
+    if (part.includes("_P2") || part === "P2") priorities.add("P2");
+    if (part.includes("PAYGE"))    customerTypes.add("PAYGE");
+    if (part.includes("SERVICES")) customerTypes.add("Services");
+    if (part.includes("CREDIT"))   customerTypes.add("Credit");
+  }
   return { priorities: [...priorities], customerTypes: [...customerTypes] };
 }
 
@@ -196,10 +171,6 @@ function bizHoursElapsed(startUTC, endUTC, customerType) {
 function isIrrelevant(row) {
   return (row["Label"] || row["Labels"] || "").toLowerCase().includes("irrelevant");
 }
-function isExcludedFromUnanswered(labelStr) {
-  const s = (labelStr || "").toLowerCase();
-  return s.includes("cc_resolved") || s.includes("cc_duplicate message") || s.includes("cc_on hold");
-}
 function isAgentMsg(row) {
   const author = (row["Author name"] || "").trim().toLowerCase();
   return author.includes("british gas") || author.includes("automation");
@@ -209,18 +180,11 @@ function isCustomerMsg(row) {
 }
 
 function getReportMonth(rows) {
-  const counts = {};
   for (const row of rows) {
     const t = parseDate(row["Date created (UTC)"]);
-    if (isNaN(t)) continue;
-    const key = `${t.getUTCFullYear()}-${t.getUTCMonth()}`;
-    counts[key] = (counts[key] || 0) + 1;
+    if (!isNaN(t)) return { year: t.getUTCFullYear(), month: t.getUTCMonth() };
   }
-  const keys = Object.keys(counts);
-  if (!keys.length) return null;
-  const best = keys.reduce((a, b) => counts[a] >= counts[b] ? a : b);
-  const [year, month] = best.split("-").map(Number);
-  return { year, month };
+  return null;
 }
 
 function inReportMonth(date, reportMonth) {
@@ -244,7 +208,9 @@ function calcMetrics(rows) {
   const responses = [];
   for (const msgs of Object.values(convMap)) {
     const sorted = [...msgs].sort((a, b) => parseDate(a["Date created (UTC)"]) - parseDate(b["Date created (UTC)"]));
+
     let searchFrom = new Date(0);
+
     while (true) {
       const customer = sorted.find((m) => {
         if (!isCustomerMsg(m)) return false;
@@ -290,6 +256,7 @@ function calcMetrics(rows) {
           url,
         });
       }
+
       searchFrom = agentTime;
     }
   }
@@ -325,6 +292,11 @@ function calcJacksData(rows, reportMonth) {
       if (!customer) break;
       const customerTime = parseDate(customer["Date created (UTC)"]);
       const { customerTypes, priorities } = detectLabels(customer["Label"] || customer["Labels"] || "");
+      const convId = customer["Conversation ID"];
+      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
+        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
+      const content = customer["Content"] || "";
+      const network = customer["Network"] || "";
       const agentReply = sorted.find((m) => {
         if (!isAgentMsg(m)) return false;
         const t = parseDate(m["Date created (UTC)"]);
@@ -332,11 +304,6 @@ function calcJacksData(rows, reportMonth) {
         if (reportMonth && !inAllowedAgentMonth(t, reportMonth)) return false;
         return true;
       });
-      const convId = customer["Conversation ID"];
-      const url = customer["URL"] || customer["Permalink"] || customer["Falcon URL"]
-        || `https://app.falcon.io/#/engage/${convId}/${convId}`;
-      const content = customer["Content"] || "";
-      const network = customer["Network"] || "";
       if (agentReply) {
         const agentTime = parseDate(agentReply["Date created (UTC)"]);
         const ct = customerTypes[0] ?? null;
@@ -344,10 +311,7 @@ function calcJacksData(rows, reportMonth) {
         items.push({ answered: true, minutes, customerTypes, priorities, date: customerTime, content, network, url });
         searchFrom = agentTime;
       } else {
-        const labelStr = customer["Label"] || customer["Labels"] || "";
-        if (!isExcludedFromUnanswered(labelStr)) {
-          items.push({ answered: false, minutes: null, customerTypes, priorities, date: customerTime, content, network, url });
-        }
+        items.push({ answered: false, minutes: null, customerTypes, priorities, date: customerTime, content, network, url });
         break;
       }
     }
@@ -454,138 +418,8 @@ function JacksTab({ items }) {
   );
 }
 
-const VOLUME_SERIES = [
-  { key: "firstMsgs",         label: "All 1st messages",         color: C.accent },
-  { key: "firstMsgResponses", label: "All 1st msg responses",    color: C.ok },
-  { key: "totalCustomer",     label: "Total customer messages",  color: "#A78BFA" },
-  { key: "totalAgent",        label: "Total agent replies",      color: C.warn },
-];
-
-function OverTimeTab({ items, rawRows }) {
-  const [selected, setSelected] = useState(["firstMsgs", "firstMsgResponses"]);
-  const [priorityFilter, setPriorityFilter] = useState("all");
-  const [ctFilter, setCtFilter] = useState("all");
-
-  const toggle = (key) => setSelected((prev) => prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
-
-  const filteredItems = items
-    .filter((i) => priorityFilter === "all" || i.priorities.includes(priorityFilter))
-    .filter((i) => ctFilter === "all" || i.customerTypes.includes(ctFilter));
-
-  const customerDayMap = {}, agentDayMap = {};
-  rawRows.forEach((row) => {
-    const t = parseDate(row["Date created (UTC)"]);
-    if (isNaN(t)) return;
-    if (priorityFilter !== "all") {
-      const { priorities } = detectLabels(row["Label"] || row["Labels"] || "");
-      if (!priorities.includes(priorityFilter)) return;
-    }
-    if (ctFilter !== "all") {
-      const { customerTypes } = detectLabels(row["Label"] || row["Labels"] || "");
-      if (!customerTypes.includes(ctFilter)) return;
-    }
-    const day = t.toISOString().slice(0, 10);
-    if (isCustomerMsg(row)) customerDayMap[day] = (customerDayMap[day] || 0) + 1;
-    else if (isAgentMsg(row)) agentDayMap[day] = (agentDayMap[day] || 0) + 1;
-  });
-
-  const firstMsgDayMap = {}, firstMsgResDayMap = {};
-  filteredItems.forEach((item) => {
-    if (!item.date) return;
-    const day = item.date.toISOString().slice(0, 10);
-    firstMsgDayMap[day] = (firstMsgDayMap[day] || 0) + 1;
-    if (item.answered) firstMsgResDayMap[day] = (firstMsgResDayMap[day] || 0) + 1;
-  });
-
-  const dataByKey = { firstMsgs: firstMsgDayMap, firstMsgResponses: firstMsgResDayMap, totalCustomer: customerDayMap, totalAgent: agentDayMap };
-
-  const allDays = new Set([
-    ...Object.keys(customerDayMap), ...Object.keys(agentDayMap),
-    ...Object.keys(firstMsgDayMap), ...Object.keys(firstMsgResDayMap),
-  ]);
-  const days = [...allDays].sort();
-
-  if (!days.length) {
-    return <div style={{ padding: "40px 24px", textAlign: "center", color: C.textDim, fontSize: 13 }}>No data to display.</div>;
-  }
-
-  const activeSeries = VOLUME_SERIES.filter((s) => selected.includes(s.key));
-  const W = 1200, H = 480;
-  const pad = { top: 24, right: 32, bottom: 52, left: 52 };
-  const cW = W - pad.left - pad.right;
-  const cH = H - pad.top - pad.bottom;
-  const maxVal = Math.max(...activeSeries.flatMap((s) => days.map((d) => dataByKey[s.key][d] || 0)), 1);
-  const yMax = Math.ceil(maxVal / 5) * 5 || 5;
-  const yTicks = Math.min(yMax, 6);
-  const xPos = (i) => pad.left + (days.length > 1 ? (i / (days.length - 1)) * cW : cW / 2);
-  const yPos = (v) => pad.top + cH - (v / yMax) * cH;
-  const showEvery = Math.max(1, Math.ceil(days.length / 16));
-
-  return (
-    <div>
-      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
-          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-            <option value="all">All priorities</option>
-            {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
-          </select>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Customer type:</span>
-          <select value={ctFilter} onChange={(e) => setCtFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-            <option value="all">All types</option>
-            {CUSTOMER_TYPES.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
-          </select>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Show:</span>
-          {VOLUME_SERIES.map((s) => (
-            <button key={s.key} onClick={() => toggle(s.key)} style={{ padding: "4px 12px", borderRadius: 5, fontSize: 12, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${selected.includes(s.key) ? s.color : C.border}`, background: selected.includes(s.key) ? s.color + "22" : "transparent", color: selected.includes(s.key) ? s.color : C.textDim }}>
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div style={{ padding: "20px 24px" }}>
-        <div style={{ overflowX: "auto" }}>
-          <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
-            {Array.from({ length: yTicks + 1 }, (_, i) => {
-              const v = Math.round((yMax / yTicks) * i);
-              const y = yPos(v);
-              return (
-                <g key={i}>
-                  <line x1={pad.left} x2={pad.left + cW} y1={y} y2={y} stroke={C.border} strokeWidth={1} />
-                  <text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize={10} fill={C.textDim}>{v}</text>
-                </g>
-              );
-            })}
-            {days.map((day, i) => {
-              if (i % showEvery !== 0 && i !== days.length - 1) return null;
-              return <text key={day} x={xPos(i)} y={pad.top + cH + 18} textAnchor="middle" fontSize={10} fill={C.textDim}>{day.slice(5)}</text>;
-            })}
-            <line x1={pad.left} x2={pad.left} y1={pad.top} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
-            <line x1={pad.left} x2={pad.left + cW} y1={pad.top + cH} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
-            {activeSeries.map(({ key, color }) => {
-              const values = days.map((d) => dataByKey[key][d] || 0);
-              const pts = values.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
-              return (
-                <g key={key}>
-                  <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
-                  {values.map((v, i) => <circle key={i} cx={xPos(i)} cy={yPos(v)} r={3} fill={color} />)}
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-        <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Volume per day (UTC) · priority &amp; customer type filters apply to labelled messages</div>
-      </div>
-    </div>
-  );
-}
-
 function UnansweredTab({ items }) {
-  const [priorityFilter, setPriorityFilter] = useState("P0");
+  const [priorityFilter, setPriorityFilter] = useState("all");
   const [ctFilter, setCtFilter] = useState("all");
 
   const unanswered = items.filter((i) => !i.answered);
@@ -659,6 +493,94 @@ function UnansweredTab({ items }) {
   );
 }
 
+function OverTimeTab({ items }) {
+  const dayMap = {};
+  for (const item of items) {
+    if (!item.date) continue;
+    const day = item.date.toISOString().slice(0, 10);
+    if (!dayMap[day]) dayMap[day] = [];
+    dayMap[day].push(item);
+  }
+  const days = Object.keys(dayMap).sort();
+
+  if (!days.length) {
+    return <div style={{ padding: "40px 24px", textAlign: "center", color: C.textDim, fontSize: 13 }}>No data to display.</div>;
+  }
+
+  const series = [
+    { key: null,       label: "All",      color: C.accent },
+    { key: "Credit",   label: "Credit",   color: CT_META.Credit.color },
+    { key: "PAYGE",    label: "PAYGE",    color: CT_META.PAYGE.color },
+    { key: "Services", label: "Services", color: CT_META.Services.color },
+  ];
+
+  const seriesData = series.map(({ key, label, color }) => ({
+    label, color,
+    values: days.map((day) => {
+      const di = dayMap[day] || [];
+      return key ? di.filter((i) => i.customerTypes.includes(key)).length : di.length;
+    }),
+  }));
+
+  const W = 860, H = 300;
+  const pad = { top: 24, right: 24, bottom: 52, left: 44 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  const maxVal = Math.max(...seriesData.flatMap((s) => s.values), 1);
+  const yMax = Math.ceil(maxVal / 5) * 5 || 5;
+  const yTicks = Math.min(yMax, 5);
+
+  const xPos = (i) => pad.left + (days.length > 1 ? (i / (days.length - 1)) * cW : cW / 2);
+  const yPos = (v) => pad.top + cH - (v / yMax) * cH;
+  const showEvery = Math.max(1, Math.ceil(days.length / 12));
+
+  return (
+    <div style={{ padding: "20px 24px" }}>
+      <div style={{ display: "flex", gap: 20, marginBottom: 20, flexWrap: "wrap" }}>
+        {series.map(({ label, color }) => (
+          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text }}>
+            <div style={{ width: 24, height: 3, background: color, borderRadius: 2 }} />
+            <span>{label}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <svg width={W} height={H} style={{ display: "block" }}>
+          {Array.from({ length: yTicks + 1 }, (_, i) => {
+            const v = Math.round((yMax / yTicks) * i);
+            const y = yPos(v);
+            return (
+              <g key={i}>
+                <line x1={pad.left} x2={pad.left + cW} y1={y} y2={y} stroke={C.border} strokeWidth={1} />
+                <text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize={10} fill={C.textDim}>{v}</text>
+              </g>
+            );
+          })}
+          {days.map((day, i) => {
+            if (i % showEvery !== 0 && i !== days.length - 1) return null;
+            return (
+              <text key={day} x={xPos(i)} y={pad.top + cH + 18} textAnchor="middle" fontSize={10} fill={C.textDim}>{day.slice(5)}</text>
+            );
+          })}
+          <line x1={pad.left} x2={pad.left} y1={pad.top} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
+          <line x1={pad.left} x2={pad.left + cW} y1={pad.top + cH} y2={pad.top + cH} stroke={C.border} strokeWidth={1} />
+          {seriesData.map(({ label, color, values }) => {
+            const pts = values.map((v, i) => `${xPos(i)},${yPos(v)}`).join(" ");
+            return (
+              <g key={label}>
+                <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
+                {values.map((v, i) => <circle key={i} cx={xPos(i)} cy={yPos(v)} r={3} fill={color} />)}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>First messages per day (UTC) · customer types may overlap</div>
+    </div>
+  );
+}
+
 function calcStats(matching) {
   if (!matching.length) return null;
   const w30 = matching.filter((r) => r.minutes <= 30).length;
@@ -709,29 +631,32 @@ function PctBar({ pct, color }) {
 }
 
 function SLACell({ data }) {
-  if (!data) return <td style={{ padding: "12px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
-  const bands = [
-    { label: "Within 30 min", count: data.within30, pct: data.pct30 },
-    { label: "Within 60 min", count: data.within60, pct: data.pct60 },
-    { label: "Within 90 min", count: data.within90, pct: data.pct90 },
-  ];
+  if (!data) return <td style={{ padding: "14px 16px", textAlign: "center", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>—</td>;
+  const color30 = data.pct30 >= 80 ? C.ok : data.pct30 >= 50 ? C.warn : C.danger;
+  const color60 = data.pct60 >= 80 ? C.ok : data.pct60 >= 50 ? C.warn : C.danger;
+  const color90 = data.pct90 >= 80 ? C.ok : data.pct90 >= 50 ? C.warn : C.danger;
   return (
-    <td style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-        {bands.map(({ label, count, pct }) => {
-          const color = pct >= 80 ? C.ok : pct >= 50 ? C.warn : C.danger;
-          return (
-            <div key={label}>
-              <div style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>{label}</div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                <span style={{ fontSize: 20, fontWeight: 800, color, lineHeight: 1 }}>{count}</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color }}>{pct}%</span>
-              </div>
-              <PctBar pct={pct} color={color} />
-            </div>
-          );
-        })}
+    <td style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" }}>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{data.total} responses · avg {fmtMins(data.avgMins)}</div>
+      <div style={{ display: "flex", gap: 14 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 30 min</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: color30, lineHeight: 1 }}>{data.pct30}%</div>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within30}/{data.total}</div>
+          <PctBar pct={data.pct30} color={color30} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 60 min</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: color60, lineHeight: 1 }}>{data.pct60}%</div>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within60}/{data.total}</div>
+          <PctBar pct={data.pct60} color={color60} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 2 }}>Within 90 min</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: color90, lineHeight: 1 }}>{data.pct90}%</div>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 1, marginBottom: 2 }}>{data.within90}/{data.total}</div>
+          <PctBar pct={data.pct90} color={color90} />
+        </div>
       </div>
     </td>
   );
@@ -745,53 +670,41 @@ function LabelPill({ label, color }) {
   );
 }
 
-function BreachesTab({ responses, excluded, onExclude, onRestore }) {
-  const [priorityFilter, setPriorityFilter] = useState("P0");
-  const [ctFilter, setCtFilter] = useState("all");
-
-  const allBreaches = responses.filter((r) => r.minutes > 30);
-
-  const visible = allBreaches
-    .filter((r) => priorityFilter === "all" || r.priorities.includes(priorityFilter))
-    .filter((r) => ctFilter === "all" || r.customerTypes.includes(ctFilter))
+function BreachTable({ responses, priority, excluded, onExclude, onRestore }) {
+  const breaches = responses
+    .filter((r) => r.priorities.includes(priority) && r.minutes > 30)
     .sort((a, b) => b.minutes - a.minutes);
 
-  const excludedCount = allBreaches.filter((r) => excluded.has(r.id)).length;
+  const [ctFilter, setCtFilter] = useState("all");
+  const visible = ctFilter === "all" ? breaches : breaches.filter((r) => r.customerTypes.includes(ctFilter));
+  const excludedInTab = breaches.filter((r) => excluded.has(r.id)).length;
+
   const fmtDate = (d) => (!d || isNaN(d)) ? "—" : d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   return (
     <div>
-      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Priority:</span>
-          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-            <option value="all">All priorities</option>
-            {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
-          </select>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: C.textDim }}>Customer type:</span>
-          <select value={ctFilter} onChange={(e) => setCtFilter(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 5, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
-            <option value="all">All types</option>
-            {CUSTOMER_TYPES.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
-          </select>
-        </div>
-        <span style={{ fontSize: 11, color: C.textDim }}>{visible.length} of {allBreaches.length} breaches</span>
-        {excludedCount > 0 && (
-          <span style={{ fontSize: 12, color: C.muted }}>
-            {excludedCount} excluded ·{" "}
-            <button onClick={() => allBreaches.forEach((r) => onRestore(r.id))} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Reset all</button>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: C.textDim, marginRight: 4 }}>Customer type:</span>
+        {["all", ...CUSTOMER_TYPES].map((f) => (
+          <button key={f} onClick={() => setCtFilter(f)} style={{ padding: "5px 12px", borderRadius: 5, border: `1px solid ${ctFilter === f ? C.accent : C.border}`, background: ctFilter === f ? C.accent + "22" : "transparent", color: ctFilter === f ? C.accent : C.textDim, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+            {f === "all" ? `All (${breaches.length})` : f}
+          </button>
+        ))}
+        {excludedInTab > 0 && (
+          <span style={{ marginLeft: 8, fontSize: 12, color: C.muted }}>
+            {excludedInTab} excluded ·{" "}
+            <button onClick={() => breaches.forEach((r) => onRestore(r.id))} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Reset</button>
           </span>
         )}
       </div>
       {visible.length === 0 ? (
-        <div style={{ padding: "32px 0", textAlign: "center", color: C.ok, fontSize: 14 }}>✓ No breaches for this filter.</div>
+        <div style={{ padding: "32px 0", textAlign: "center", color: C.ok, fontSize: 14 }}>✓ All {priority} responses were within 30 minutes.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
             <thead>
               <tr style={{ background: C.bg }}>
-                {["Date", "Network", "Priority", "Customer Type", "Response Time", "SLA Band", "First Customer Message", "Link", ""].map((h) => (
+                {["Date", "Network", "Customer Type", "Response Time", "SLA Band", "First Customer Message", "Link", ""].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, color: C.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -804,9 +717,6 @@ function BreachesTab({ responses, excluded, onExclude, onRestore }) {
                   <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}`, opacity: isExcluded ? 0.4 : 1 }}>
                     <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtDate(r.date)}</td>
                     <td style={{ padding: "10px 14px", color: C.textDim, whiteSpace: "nowrap", verticalAlign: "top", textTransform: "capitalize" }}>{r.network}</td>
-                    <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                      {r.priorities.map((p) => <LabelPill key={p} label={p} color={PRIORITY_META[p]?.color ?? C.textDim} />)}
-                    </td>
                     <td style={{ padding: "10px 14px", verticalAlign: "top", whiteSpace: "nowrap" }}>
                       {r.customerTypes.map((ct) => <LabelPill key={ct} label={ct} color={CT_META[ct]?.color ?? C.textDim} />)}
                     </td>
@@ -849,7 +759,7 @@ function LockScreen({ onUnlock }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", width: "100%", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "40px 48px", width: 340, textAlign: "center" }}>
         <div style={{ width: 48, height: 48, borderRadius: 12, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, margin: "0 auto 20px" }}>⚡</div>
         <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>Engage SLA Report</div>
@@ -881,12 +791,11 @@ export default function App() {
   const [excluded, setExcluded] = useState(new Set());
   const [summary, setSummary] = useState(null);
   const [jacksData, setJacksData] = useState([]);
-  const [rawRows, setRawRows] = useState([]);
   const [tab, setTab] = useState("jacks");
 
   const handleFile = useCallback((e) => {
     const file = e.target.files[0]; if (!file) return;
-    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set()); setJacksData([]); setRawRows([]);
+    setCsvFile(file.name); setStatus("idle"); setAllResponses([]); setExcluded(new Set()); setJacksData([]);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
@@ -896,7 +805,6 @@ export default function App() {
         const reportMonth = getReportMonth(rows);
         setAllResponses(resp);
         setJacksData(calcJacksData(rows, reportMonth));
-        setRawRows(rows);
         setSummary({ totalMessages, totalConversations, responses: resp.length, reportMonthLabel });
         setStatus("done");
       } catch (err) { setErrorMsg(err.message); setStatus("error"); }
@@ -912,17 +820,22 @@ export default function App() {
 
   const tabs = [
     { id: "jacks", label: "All 1st Messages" },
-    { id: "unanswered", label: `Unanswered 1st Messages (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
-    { id: "sla", label: "Answered 1st messages - by SLA" },
-    { id: "breaches", label: `SLA Breaches (${responses.filter((r) => r.minutes > 30).length})`, color: C.danger },
-    { id: "overtime", label: "Volume Over Time" },
+    { id: "sla", label: "SLA Report" },
+    ...PRIORITIES.map((p) => ({
+      id: p,
+      label: `${p} Breaches (${responses.filter((r) => r.priorities.includes(p) && r.minutes > 30).length})`,
+      color: PRIORITY_META[p].color,
+    })),
+    { id: "unanswered", label: `Unanswered (${jacksData.filter((i) => !i.answered).length})`, color: C.danger },
+    { id: "overtime", label: "Over Time" },
   ];
 
   if (!unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 40px" }}>
-      <div>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans','Segoe UI',sans-serif", padding: "32px 24px" }}>
+      <div style={{ maxWidth: 980, margin: "0 auto" }}>
+
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 32 }}>
           <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg,#00E5FF,#0099AA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>⚡</div>
           <div>
@@ -1013,13 +926,14 @@ export default function App() {
           </div>
         )}
 
-        {status === "done" && tab === "breaches" && (
-          <div style={{ background: C.surface, border: `1px solid ${C.danger}55`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
-            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
+        {status === "done" && PRIORITIES.includes(tab) && (
+          <div style={{ background: C.surface, border: `1px solid ${PRIORITY_META[tab].color}55`, borderRadius: "0 6px 10px 10px", padding: "20px 24px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+              <span style={{ background: PRIORITY_META[tab].color + "22", color: PRIORITY_META[tab].color, border: `1px solid ${PRIORITY_META[tab].color}55`, borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{tab}</span>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>SLA Breaches — responses over 30 minutes</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>Sorted by longest response time first. Excludable from the SLA report above.</div>
             </div>
-            <BreachesTab responses={allResponses} excluded={excluded} onExclude={handleExclude} onRestore={handleRestore} />
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>Sorted by longest response time first. These conversations are included in the SLA report above.</div>
+            <BreachTable responses={allResponses} priority={tab} excluded={excluded} onExclude={handleExclude} onRestore={handleRestore} />
           </div>
         )}
 
@@ -1046,12 +960,13 @@ export default function App() {
         {status === "done" && tab === "overtime" && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "0 6px 10px 10px", overflow: "hidden" }}>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Volume Over Time</div>
-              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>Daily message volumes · toggle series and filter by priority or customer type</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>First Messages Over Time</div>
+              <div style={{ fontSize: 12, color: C.textDim, marginTop: 3 }}>Total qualifying first messages per day, broken down by customer type</div>
             </div>
-            <OverTimeTab items={jacksData} rawRows={rawRows} />
+            <OverTimeTab items={jacksData} />
           </div>
         )}
+
       </div>
     </div>
   );
